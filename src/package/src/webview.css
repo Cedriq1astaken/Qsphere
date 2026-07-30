@@ -1,0 +1,20 @@
+body {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    margin: 0;
+}
+
+canvas {
+    width: 300px;
+    height: 300px;
+}
+
+#status {
+    min-height: 1.2em;
+    margin: 12px 0 0;
+    font-family: sans-serif;
+    font-size: 12px;
+}

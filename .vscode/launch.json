@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Extension (src/package)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/src/package"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/src/package/out/**/*.js"
+      ],
+      "preLaunchTask": "build-package"
+    }
+  ]
+}

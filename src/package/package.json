@@ -1,0 +1,54 @@
+{
+  "name": "qsphere",
+  "displayName": "Qsphere Quantum Visualizer",
+  "description": "Quantum circuit and state visualization extension for VS Code",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:qsharp"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "qsphere.openVisualizer",
+        "title": "Qsphere: Open Quantum Visualizer",
+        "category": "Qsphere",
+        "icon": "$(graph)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "qsphere.openVisualizer",
+          "group": "navigation",
+          "when": "resourceExtname == .qs || editorLangId == qsharp"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "qsphere.openVisualizer",
+          "group": "navigation",
+          "when": "resourceExtname == .qs || editorLangId == qsharp"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.5"
+  }
+}
