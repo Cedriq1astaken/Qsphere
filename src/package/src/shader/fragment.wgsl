@@ -11,7 +11,7 @@ fn main(in: FragmentInput) -> @location(0) vec4f {
 
     let N = normalize(in.normal);
     let centerFactor = max(N.z, 0.0);
-    let alpha = mix(0.8, 0.2, centerFactor);
+    let alpha = mix(0.6, 0.2, centerFactor);
 
     return vec4f(baseColor * depthFactor, alpha);
 }

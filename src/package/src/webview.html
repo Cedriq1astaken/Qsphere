@@ -6,12 +6,28 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Qsphere Visualizer</title>
     <link rel="stylesheet" href="webview.css">
+    <script defer src="script/wasmParser.js"></script>
     <script defer src="script/math.js"></script>
+    <script defer src="script/blochVector.js"></script>
     <script defer src="script/webview.js"></script>
 </head>
 
 <body>
-    <canvas></canvas>
+    <div id="container">
+        <canvas id="canvas"
+                data-vertex-shader="shader/vertex.wgsl"
+                data-fragment-shader="shader/fragment.wgsl"
+                data-arrow-shader="shader/fragment_arrow.wgsl"
+                data-lines-shader="shader/fragment_lines.wgsl"
+                data-test-qs="test.qs"></canvas>
+        <div class="label" id="label-zero">|0⟩</div>
+        <div class="label" id="label-one">|1⟩</div>
+        <div class="label" id="label-plus">|+⟩</div>
+        <div class="label" id="label-minus">|-⟩</div>
+        <div class="label" id="label-i-plus">|+i⟩</div>
+        <div class="label" id="label-i-minus">|-i⟩</div>
+    </div>
+    <button id="replay-btn">Replay Animation</button>
     <p id="status"></p>
 </body>
 
