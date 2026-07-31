@@ -1,6 +1,24 @@
+function stripLineComments(code) {
+    return code.replace(/\/\/[^\n]*/g, '');
+}
+
+function isValidTarget(str) {
+    if (!str || str.trim().length === 0) return false;
+    return /^[A-Za-z_][A-Za-z0-9_]*\s*(\[\s*\d+\s*\])?$/.test(str.trim());
+}
+
+function isValidAngleExpr(str) {
+    if (!str || str.trim().length === 0) return false;
+    let s = str.trim()
+        .replace(/(?:Std\.Math\.|Microsoft\.Quantum\.Math\.|Math\.)?PI\s*\(\s*\)/gi, '1')
+        .replace(/(?:Std\.Math\.|Microsoft\.Quantum\.Math\.|Math\.)?\bPI\b/gi, '1')
+        .replace(/(?:Std\.Math\.|Microsoft\.Quantum\.Math\.|Math\.)?\bTAU\b/gi, '1');
+    return /^[0-9.eE+\-*/()\s]+$/.test(s);
+}
+
 function parseAngle(argStr) {
     if (!argStr) return 0;
-    
+
     let sanitized = argStr.trim()
         .replace(/(?:Std\.Math\.|Microsoft\.Quantum\.Math\.|Math\.)?PI\s*\(\s*\)/gi, '3.141592653589793')
         .replace(/(?:Std\.Math\.|Microsoft\.Quantum\.Math\.|Math\.)?\bPI\b/gi, '3.141592653589793')
@@ -47,9 +65,7 @@ function parseAngle(argStr) {
             if (token.type === 'op' && token.value === '(') {
                 pos++;
                 const val = parseAddSub();
-                if (pos < tokens.length && tokens[pos].value === ')') {
-                    pos++;
-                }
+                if (pos < tokens.length && tokens[pos].value === ')') pos++;
                 return val;
             }
             if (token.type === 'num') {
@@ -88,12 +104,34 @@ function parseAngle(argStr) {
 
     try {
         const tokens = tokenize(sanitized);
-        if (tokens.length > 0) {
-            return evaluate(tokens);
-        }
+        if (tokens.length > 0) return evaluate(tokens);
     } catch (e) {}
 
     return 0;
+}
+
+function findMatchingParen(code, startIdx) {
+    let depth = 0;
+    for (let i = startIdx; i < code.length; i++) {
+        if (code[i] === '(') depth++;
+        else if (code[i] === ')') {
+            depth--;
+            if (depth === 0) return i;
+        }
+    }
+    return -1;
+}
+
+function findMatchingBrace(code, startIdx) {
+    let depth = 0;
+    for (let i = startIdx; i < code.length; i++) {
+        if (code[i] === '{') depth++;
+        else if (code[i] === '}') {
+            depth--;
+            if (depth === 0) return i;
+        }
+    }
+    return -1;
 }
 
 class QSharpWasmParser {
@@ -104,119 +142,155 @@ class QSharpWasmParser {
     async init() {
     }
 
+    extractOperationDefinitions(code) {
+        const opDefs = new Map();
+        const opRegex = /\boperation\s+([A-Za-z0-9_]+)\s*\(/g;
+        let match;
+
+        while ((match = opRegex.exec(code)) !== null) {
+            const opName = match[1];
+            const startParenIdx = opRegex.lastIndex - 1;
+            const endParenIdx = findMatchingParen(code, startParenIdx);
+            if (endParenIdx === -1) continue;
+
+            const paramStr = code.substring(startParenIdx + 1, endParenIdx);
+            const params = paramStr.split(',')
+                .map(p => p.trim())
+                .filter(p => p.length > 0)
+                .map(p => p.split(':')[0].trim())
+                .filter(p => p.length > 0);
+
+            const openBraceIdx = code.indexOf('{', endParenIdx);
+            if (openBraceIdx === -1) continue;
+
+            const closeBraceIdx = findMatchingBrace(code, openBraceIdx);
+            if (closeBraceIdx === -1) continue;
+
+            const body = code.substring(openBraceIdx + 1, closeBraceIdx);
+            opDefs.set(opName, { name: opName, params, body });
+        }
+
+        return opDefs;
+    }
+
     parse(code) {
         if (!code || typeof code !== 'string') {
-            return {
-                entryPointFound: false,
-                qubitsDeclared: 0,
-                operations: []
-            };
+            return { entryPointFound: false, qubitsDeclared: 0, operations: [] };
         }
+
+        const stripped = stripLineComments(code);
 
         let startIdx = 0;
         let entryPointFound = false;
 
-        const entryMatch = /@EntryPoint\s*\(\s*\)/i.exec(code);
+        const entryMatch = /@EntryPoint\s*\(\s*\)/i.exec(stripped);
         if (entryMatch) {
             entryPointFound = true;
             startIdx = entryMatch.index + entryMatch[0].length;
         }
 
-        const executableCode = code.substring(startIdx);
+        const executableCode = stripped.substring(startIdx);
 
         let qubitsDeclared = 0;
         const qubitRegex = /use\s+[A-Za-z0-9_,\s=]+\s*=\s*Qubit\s*(?:\[\s*(\d+)\s*\]|\(\s*\))/gi;
         let match;
         while ((match = qubitRegex.exec(executableCode)) !== null) {
-            if (match[1]) {
-                qubitsDeclared += parseInt(match[1], 10);
-            } else {
-                qubitsDeclared += 1;
-            }
+            if (match[1]) qubitsDeclared += parseInt(match[1], 10);
+            else qubitsDeclared += 1;
         }
 
+        const customOpDefs = this.extractOperationDefinitions(stripped);
         const operations = [];
+        const primitiveGates = new Set(['H', 'X', 'Y', 'Z', 'S', 'T', 'I', 'Rx', 'Ry', 'Rz', 'R1']);
         const rotGates = new Set(['Rx', 'Ry', 'Rz', 'R1']);
 
-        const gateFinder = /\b(H|X|Y|Z|S|T|I|Rx|Ry|Rz|R1)\s*\(/g;
-        let gateMatch;
+        const evaluateBlock = (blockCode, paramBindings, callStack) => {
+            if (callStack.size > 20) return;
 
-        while ((gateMatch = gateFinder.exec(executableCode)) !== null) {
-            const gate = gateMatch[1];
-            const startParenIdx = gateFinder.lastIndex - 1;
+            let codeToProcess = blockCode;
+            if (paramBindings && paramBindings.size > 0) {
+                paramBindings.forEach((argVal, paramName) => {
+                    const re = new RegExp('\\b' + paramName + '\\b', 'g');
+                    codeToProcess = codeToProcess.replace(re, argVal);
+                });
+            }
 
-            let depth = 0;
-            let endParenIdx = -1;
+            const callFinder = /\b([A-Za-z0-9_]+)\s*\(/g;
+            let callMatch;
 
-            for (let i = startParenIdx; i < executableCode.length; i++) {
-                const char = executableCode[i];
-                if (char === '(') {
-                    depth++;
-                } else if (char === ')') {
-                    depth--;
-                    if (depth === 0) {
-                        endParenIdx = i;
-                        break;
+            while ((callMatch = callFinder.exec(codeToProcess)) !== null) {
+                const funcName = callMatch[1];
+                const startParenIdx = callFinder.lastIndex - 1;
+                const endParenIdx = findMatchingParen(codeToProcess, startParenIdx);
+
+                if (endParenIdx === -1) continue;
+
+                const innerArgs = codeToProcess.substring(startParenIdx + 1, endParenIdx).trim();
+
+                if (primitiveGates.has(funcName)) {
+                    if (rotGates.has(funcName)) {
+                        const lastCommaIdx = innerArgs.lastIndexOf(',');
+                        if (lastCommaIdx === -1) continue;
+
+                        const argStr = innerArgs.substring(0, lastCommaIdx).trim();
+                        const targetStr = innerArgs.substring(lastCommaIdx + 1).trim();
+
+                        if (!isValidAngleExpr(argStr)) continue;
+                        if (!isValidTarget(targetStr)) continue;
+
+                        let target = 0;
+                        const arrayMatch = /[A-Za-z0-9_]+\s*\[\s*(\d+)\s*\]/.exec(targetStr);
+                        if (arrayMatch) target = parseInt(arrayMatch[1], 10);
+
+                        operations.push({
+                            operation: funcName,
+                            angle: parseAngle(argStr),
+                            target
+                        });
+
+                    } else {
+                        if (!isValidTarget(innerArgs)) continue;
+
+                        let target = 0;
+                        const arrayMatch = /[A-Za-z0-9_]+\s*\[\s*(\d+)\s*\]/.exec(innerArgs);
+                        if (arrayMatch) target = parseInt(arrayMatch[1], 10);
+
+                        operations.push({ operation: funcName, angle: 0, target });
                     }
+
+                } else if (customOpDefs.has(funcName) && !callStack.has(funcName)) {
+                    const customDef = customOpDefs.get(funcName);
+
+                    const rawArgs = innerArgs.length > 0
+                        ? innerArgs.split(',').map(a => a.trim()).filter(a => a.length > 0)
+                        : [];
+
+                    if (rawArgs.length !== customDef.params.length) continue;
+
+                    const childBindings = new Map();
+                    customDef.params.forEach((paramName, idx) => {
+                        childBindings.set(paramName, rawArgs[idx]);
+                    });
+
+                    const newStack = new Set(callStack);
+                    newStack.add(funcName);
+
+                    evaluateBlock(customDef.body, childBindings, newStack);
                 }
             }
+        };
 
-            if (endParenIdx === -1) {
-                continue;
-            }
-
-            const innerArgs = executableCode.substring(startParenIdx + 1, endParenIdx).trim();
-
-            if (rotGates.has(gate)) {
-                const lastCommaIdx = innerArgs.lastIndexOf(',');
-                if (lastCommaIdx === -1) {
-                    continue;
-                }
-
-                const argStr = innerArgs.substring(0, lastCommaIdx).trim();
-                const targetStr = innerArgs.substring(lastCommaIdx + 1).trim();
-
-                const targetMatch = /(?:[A-Za-z0-9_]+\s*\[\s*(\d+)\s*\]|([A-Za-z0-9_]+))/.exec(targetStr);
-                if (!targetMatch) {
-                    continue;
-                }
-
-                let target = 0;
-                if (targetMatch[1] !== undefined) {
-                    target = parseInt(targetMatch[1], 10);
-                }
-
-                const angle = parseAngle(argStr);
-
-                operations.push({
-                    operation: gate,
-                    angle: angle,
-                    target: target
-                });
-            } else {
-                const targetMatch = /(?:[A-Za-z0-9_]+\s*\[\s*(\d+)\s*\]|([A-Za-z0-9_]+))/.exec(innerArgs);
-                if (!targetMatch) {
-                    continue;
-                }
-
-                let target = 0;
-                if (targetMatch[1] !== undefined) {
-                    target = parseInt(targetMatch[1], 10);
-                }
-
-                operations.push({
-                    operation: gate,
-                    angle: 0,
-                    target: target
-                });
+        let entryBody = executableCode;
+        if (entryPointFound) {
+            const entryOpMatch = /operation\s+([A-Za-z0-9_]+)/.exec(executableCode);
+            if (entryOpMatch && customOpDefs.has(entryOpMatch[1])) {
+                entryBody = customOpDefs.get(entryOpMatch[1]).body;
             }
         }
 
-        return {
-            entryPointFound,
-            qubitsDeclared,
-            operations
-        };
+        evaluateBlock(entryBody, new Map(), new Set(['entry']));
+
+        return { entryPointFound, qubitsDeclared, operations };
     }
 }
 
