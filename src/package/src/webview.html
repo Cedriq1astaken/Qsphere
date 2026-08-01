@@ -8,7 +8,9 @@
     <link rel="stylesheet" href="webview.css">
     <script defer src="script/wasmParser.js"></script>
     <script defer src="script/math.js"></script>
+    <script defer src="script/gates.js"></script>
     <script defer src="script/blochVector.js"></script>
+    <script defer src="script/qsphereVector.js"></script>
     <script defer src="script/webview.js"></script>
 </head>
 
@@ -19,15 +21,23 @@
                 data-fragment-shader="shader/fragment.wgsl"
                 data-arrow-shader="shader/fragment_arrow.wgsl"
                 data-lines-shader="shader/fragment_lines.wgsl"
+                data-qnodes-shader="shader/fragment_qnodes.wgsl"
                 data-test-qs="test.qs"></canvas>
-        <div class="label" id="label-zero">|0⟩</div>
-        <div class="label" id="label-one">|1⟩</div>
-        <div class="label" id="label-plus">|+⟩</div>
-        <div class="label" id="label-minus">|-⟩</div>
-        <div class="label" id="label-i-plus">|+i⟩</div>
-        <div class="label" id="label-i-minus">|-i⟩</div>
+        <div id="bloch-labels">
+            <div class="label" id="label-zero">|0⟩</div>
+            <div class="label" id="label-one">|1⟩</div>
+            <div class="label" id="label-plus">|+⟩</div>
+            <div class="label" id="label-minus">|-⟩</div>
+            <div class="label" id="label-i-plus">|+i⟩</div>
+            <div class="label" id="label-i-minus">|-i⟩</div>
+        </div>
+        <div id="qs-labels"></div>
     </div>
-    <button id="replay-btn">Replay Animation</button>
+    <div id="controls">
+        <select id="qubit-select"></select>
+        <button id="replay-btn">Replay Animation</button>
+        <button id="mode-btn">Q-sphere</button>
+    </div>
     <p id="status"></p>
 </body>
 

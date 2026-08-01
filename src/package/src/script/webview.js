@@ -3,6 +3,10 @@ const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : und
 const canvas = document.querySelector('canvas');
 const statusText = document.querySelector('#status');
 let rotationAngles = [0.3, 0.0, 0.0];
+let currentMode = 'bloch';
+let lastParsedResult = null;
+let selectedQubitIndex = 0;
+let selectedQubitName = null;
 
 function setStatus(message) {
     statusText.textContent = message;
@@ -32,12 +36,14 @@ let pendingCode = null;
 
 async function initWebGPU() {
     let initialArrowData = null;
+    let initialQubits = 0;
     const testQsUri = canvas.dataset.testQs || 'test.qs';
     
     if (pendingCode) {
         try {
             const result = await parseQSharp(pendingCode);
             initialArrowData = computeBlochArrow(result);
+            initialQubits = result.qubitsDeclared;
         } catch (e) {
             console.warn('Could not parse pending Q# code:', e);
         }
@@ -50,6 +56,7 @@ async function initWebGPU() {
                 const code = await response.text();
                 const result = await parseQSharp(code);
                 initialArrowData = computeBlochArrow(result);
+                initialQubits = result.qubitsDeclared;
             }
         } catch (e) {
             console.warn('Could not fetch initial Q# file:', e);
@@ -58,7 +65,10 @@ async function initWebGPU() {
 
     if (!initialArrowData) {
         initialArrowData = computeBlochArrow({ operations: [], qubitsDeclared: 0 });
+        initialQubits = 0;
     }
+
+    updateVisibility(initialQubits);
 
     if (!navigator.gpu) {
         setStatus('WebGPU is not available in this browser.');
@@ -135,18 +145,21 @@ async function initWebGPU() {
     const fragmentShaderUri = canvas.dataset.fragmentShader || 'shader/fragment.wgsl';
     const arrowShaderUri = canvas.dataset.arrowShader || 'shader/fragment_arrow.wgsl';
     const linesShaderUri = canvas.dataset.linesShader || 'shader/fragment_lines.wgsl';
+    const qnodesShaderUri = canvas.dataset.qnodesShader || 'shader/fragment_qnodes.wgsl';
 
-    const [vertexShader, fragmentShader, arrowFragShader, linesFragShader] = await Promise.all([
+    const [vertexShader, fragmentShader, arrowFragShader, linesFragShader, qnodesFragShader] = await Promise.all([
         loadShader(vertexShaderUri),
         loadShader(fragmentShaderUri),
         loadShader(arrowShaderUri),
-        loadShader(linesShaderUri)
+        loadShader(linesShaderUri),
+        loadShader(qnodesShaderUri)
     ]);
 
     const vertexModule = device.createShaderModule({ code: vertexShader });
     const fragmentModule = device.createShaderModule({ code: fragmentShader });
     const arrowFragModule = device.createShaderModule({ code: arrowFragShader });
     const linesFragModule = device.createShaderModule({ code: linesFragShader });
+    const qnodesFragModule = device.createShaderModule({ code: qnodesFragShader });
 
 
     const vertexBufferLayout = {
@@ -230,10 +243,25 @@ async function initWebGPU() {
         primitive: { topology: 'line-list' }
     });
 
+    const qnodePipeline = device.createRenderPipeline({
+        layout: pipelineLayout,
+        vertex: {
+            module: vertexModule,
+            entryPoint: 'main',
+            buffers: [vertexBufferLayout]
+        },
+        fragment: {
+            module: qnodesFragModule,
+            entryPoint: 'main',
+            targets: [{ format, blend: blendState }]
+        },
+        primitive: { topology: 'triangle-list' }
+    });
+
     const lineVertices = buildSphereLines();
     const lineVertexBuffer = device.createBuffer({
         label: 'Line Vertex Buffer',
-        size: lineVertices.byteLength,
+        size: Math.max(lineVertices.byteLength, 4 * 1024 * 1024),
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
     });
     const lineVertexCount = lineVertices.length / 6;
@@ -248,6 +276,13 @@ async function initWebGPU() {
     });
     const arrowVertexCount = arrowVertices.length / 6;
     device.queue.writeBuffer(arrowVertexBuffer, 0, arrowVertices);
+
+    const qnodeVertexBuffer = device.createBuffer({
+        label: 'QNode Vertex Buffer',
+        size: 4 * 1024 * 1024,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+    });
+    let qnodeVertexCount = 0;
 
     resizeCanvas();
 
@@ -267,54 +302,55 @@ async function initWebGPU() {
         bindGroup, vertexUniformBuffer, projMatrix, buildProjMatrix,
         arrowPipeline, arrowVertexBuffer, arrowVertexCount,
         linePipeline, lineVertexBuffer, lineVertexCount,
+        qnodePipeline, qnodeVertexBuffer, qnodeVertexCount,
         currentVector, targetVector, stepVectors, stepQueue: []
     };
 }
 
 function render(state) {
-    if (!state) {
-        return;
-    }
+    if (!state) return;
 
     const commandEncoder = state.device.createCommandEncoder();
     const textureView = state.context.getCurrentTexture().createView();
 
     const passEncoder = commandEncoder.beginRenderPass({
-        colorAttachments: [
-            {
-                view: textureView,
-                clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
-                loadOp: 'clear',
-                storeOp: 'store'
-            }
-        ]
+        colorAttachments: [{
+            view: textureView,
+            clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+            loadOp: 'clear',
+            storeOp: 'store'
+        }]
     });
 
-
     passEncoder.setPipeline(state.pipeline);
-    if (state.bindGroup) {
-        passEncoder.setBindGroup(0, state.bindGroup);
-    }
+    if (state.bindGroup) passEncoder.setBindGroup(0, state.bindGroup);
     passEncoder.setVertexBuffer(0, state.vertexBuffer);
     passEncoder.draw(state.vertexCount);
 
-    if (state.linePipeline && state.lineVertexBuffer) {
+    if (state.linePipeline && state.lineVertexBuffer && state.lineVertexCount > 0) {
         passEncoder.setPipeline(state.linePipeline);
         passEncoder.setBindGroup(0, state.bindGroup);
         passEncoder.setVertexBuffer(0, state.lineVertexBuffer);
         passEncoder.draw(state.lineVertexCount);
     }
 
-
-    if (state.arrowPipeline && state.arrowVertexBuffer) {
-        passEncoder.setPipeline(state.arrowPipeline);
-        passEncoder.setBindGroup(0, state.bindGroup);
-        passEncoder.setVertexBuffer(0, state.arrowVertexBuffer);
-        passEncoder.draw(state.arrowVertexCount);
+    if (currentMode === 'bloch') {
+        if (state.arrowPipeline && state.arrowVertexBuffer && state.arrowVertexCount > 0) {
+            passEncoder.setPipeline(state.arrowPipeline);
+            passEncoder.setBindGroup(0, state.bindGroup);
+            passEncoder.setVertexBuffer(0, state.arrowVertexBuffer);
+            passEncoder.draw(state.arrowVertexCount);
+        }
+    } else {
+        if (state.qnodePipeline && state.qnodeVertexBuffer && state.qnodeVertexCount > 0) {
+            passEncoder.setPipeline(state.qnodePipeline);
+            passEncoder.setBindGroup(0, state.bindGroup);
+            passEncoder.setVertexBuffer(0, state.qnodeVertexBuffer);
+            passEncoder.draw(state.qnodeVertexCount);
+        }
     }
 
     passEncoder.end();
-
     state.device.queue.submit([commandEncoder.finish()]);
 }
 
@@ -340,7 +376,7 @@ window.addEventListener('mouseup', () => {
     isDragging = false;
 });
 
-const labelDefs = [
+const blochLabelDefs = [
     { id: 'label-zero', pos: [0, 1.15, 0] },
     { id: 'label-one', pos: [0, -1.15, 0] },
     { id: 'label-plus', pos: [1.15, 0, 0] },
@@ -354,24 +390,67 @@ function updateLabels(modelMatrix) {
     const w = rect.width;
     const h = rect.height;
 
-    for (let i = 0; i < labelDefs.length; i++) {
-        const item = labelDefs[i];
-        const el = document.getElementById(item.id);
-        if (!el) continue;
+    const blochLabelsDiv = document.getElementById('bloch-labels');
+    const qsLabelsDiv = document.getElementById('qs-labels');
 
+    if (currentMode === 'bloch') {
+        if (blochLabelsDiv) blochLabelsDiv.style.display = 'block';
+        if (qsLabelsDiv) qsLabelsDiv.style.display = 'none';
+
+        for (let i = 0; i < blochLabelDefs.length; i++) {
+            const item = blochLabelDefs[i];
+            const el = document.getElementById(item.id);
+            if (!el) continue;
+            const pt = projectPoint(item.pos, modelMatrix, w, h);
+            if (pt) {
+                el.style.transform = `translate(-50%, -50%) translate(${pt[0]}px, ${pt[1]}px)`;
+                el.style.display = 'block';
+            } else {
+                el.style.display = 'none';
+            }
+        }
+    } else {
+        if (blochLabelsDiv) blochLabelsDiv.style.display = 'none';
+        if (qsLabelsDiv) {
+            qsLabelsDiv.style.display = 'block';
+            updateQsphereLabels(modelMatrix, w, h);
+        }
+    }
+}
+
+let _qsLabelData = [];
+
+function rebuildQsphereLabels(points, N) {
+    const qsLabelsDiv = document.getElementById('qs-labels');
+    if (!qsLabelsDiv) return;
+    qsLabelsDiv.innerHTML = '';
+    _qsLabelData = [];
+    for (const pt of points) {
+        const binaryStr = pt.index.toString(2).padStart(N, '0');
+        const el = document.createElement('div');
+        el.className = 'label qs-label';
+        el.textContent = '|' + binaryStr + '⟩';
+        el.dataset.ptIndex = String(pt.index);
+        qsLabelsDiv.appendChild(el);
+        _qsLabelData.push({ el, pos: [pt.x * 1.15, pt.y * 1.15, pt.z * 1.15] });
+    }
+}
+
+function updateQsphereLabels(modelMatrix, w, h) {
+    for (const item of _qsLabelData) {
         const pt = projectPoint(item.pos, modelMatrix, w, h);
         if (pt) {
-            el.style.transform = `translate(-50%, -50%) translate(${pt[0]}px, ${pt[1]}px)`;
-            el.style.display = 'block';
+            item.el.style.transform = `translate(-50%, -50%) translate(${pt[0]}px, ${pt[1]}px)`;
+            item.el.style.display = 'block';
         } else {
-            el.style.display = 'none';
+            item.el.style.display = 'none';
         }
     }
 }
 
 function frame() {
     if (webgpuState) {
-        if (webgpuState.currentVector && webgpuState.targetVector) {
+        if (currentMode === 'bloch' && webgpuState.currentVector && webgpuState.targetVector) {
             const cur = webgpuState.currentVector;
             const tgt = webgpuState.targetVector;
             if (cur[0] !== tgt[0] || cur[1] !== tgt[1] || cur[2] !== tgt[2]) {
@@ -418,6 +497,94 @@ window.addEventListener('resize', () => {
     }
 });
 
+function updateVisibility(qubitsDeclared) {
+    const container = document.getElementById('container');
+    const controls = document.getElementById('controls');
+    if (container) container.style.display = qubitsDeclared > 0 ? 'block' : 'none';
+    if (controls) controls.style.display = qubitsDeclared > 0 ? 'flex' : 'none';
+}
+
+function populateQubitDropdown(qubitsList) {
+    const sel = document.getElementById('qubit-select');
+    if (!sel) return;
+    const prevName = selectedQubitName;
+    sel.innerHTML = '';
+    for (let i = 0; i < qubitsList.length; i++) {
+        const opt = document.createElement('option');
+        opt.value = String(i);
+        opt.textContent = qubitsList[i];
+        sel.appendChild(opt);
+    }
+    const prevIdx = prevName !== null ? qubitsList.indexOf(prevName) : -1;
+    if (prevIdx !== -1) {
+        selectedQubitIndex = prevIdx;
+        sel.value = String(prevIdx);
+    } else {
+        selectedQubitIndex = 0;
+        sel.value = '0';
+    }
+    selectedQubitName = qubitsList[selectedQubitIndex] || null;
+}
+
+const qubitSelect = document.getElementById('qubit-select');
+if (qubitSelect) {
+    qubitSelect.addEventListener('change', () => {
+        selectedQubitIndex = parseInt(qubitSelect.value, 10);
+        selectedQubitName = qubitSelect.options[qubitSelect.selectedIndex]
+            ? qubitSelect.options[qubitSelect.selectedIndex].textContent
+            : null;
+        if (webgpuState && lastParsedResult && currentMode === 'bloch') {
+            const arrowResult = computeBlochArrow(lastParsedResult, selectedQubitIndex);
+            const newVec = arrowResult.screenVector;
+            webgpuState.stepVectors = arrowResult.stepVectors || [];
+            webgpuState.targetVector = newVec;
+            webgpuState.currentVector = newVec;
+            webgpuState.stepQueue = [];
+            const arrowVerts = buildArrowVertices(newVec);
+            webgpuState.device.queue.writeBuffer(webgpuState.arrowVertexBuffer, 0, arrowVerts);
+            webgpuState.arrowVertexCount = arrowVerts.length / 6;
+            render(webgpuState);
+        }
+    });
+}
+
+const modeBtn = document.querySelector('#mode-btn');
+if (modeBtn) {
+    modeBtn.addEventListener('click', () => {
+        currentMode = currentMode === 'bloch' ? 'qsphere' : 'bloch';
+        modeBtn.textContent = currentMode === 'bloch' ? 'Q-sphere' : 'Bloch';
+        if (webgpuState && lastParsedResult) {
+            if (currentMode === 'qsphere') {
+                const qs = computeQsphere(lastParsedResult);
+                const nodeVerts = qs.nodeVertices;
+                if (nodeVerts.byteLength <= webgpuState.qnodeVertexBuffer.size) {
+                    webgpuState.device.queue.writeBuffer(webgpuState.qnodeVertexBuffer, 0, nodeVerts);
+                    webgpuState.qnodeVertexCount = nodeVerts.length / 6;
+                }
+                const ringVerts = qs.ringVertices;
+                if (ringVerts.byteLength <= webgpuState.lineVertexBuffer.size) {
+                    webgpuState.device.queue.writeBuffer(webgpuState.lineVertexBuffer, 0, ringVerts);
+                    webgpuState.lineVertexCount = ringVerts.length / 6;
+                }
+                rebuildQsphereLabels(qs.points, qs.N);
+            } else {
+                const arrowResult = computeBlochArrow(lastParsedResult, selectedQubitIndex);
+                const arrowVerts = arrowResult.vertices;
+                if (arrowVerts.byteLength <= webgpuState.arrowVertexBuffer.size) {
+                    webgpuState.device.queue.writeBuffer(webgpuState.arrowVertexBuffer, 0, arrowVerts);
+                    webgpuState.arrowVertexCount = arrowVerts.length / 6;
+                }
+                const lineVerts = buildSphereLines();
+                webgpuState.device.queue.writeBuffer(webgpuState.lineVertexBuffer, 0, lineVerts);
+                webgpuState.lineVertexCount = lineVerts.length / 6;
+                webgpuState.targetVector = arrowResult.screenVector;
+                webgpuState.currentVector = arrowResult.screenVector;
+            }
+            render(webgpuState);
+        }
+    });
+}
+
 window.addEventListener('message', async event => {
     const message = event.data;
     if (message.command === 'init' || message.command === 'update') {
@@ -425,12 +592,31 @@ window.addEventListener('message', async event => {
             pendingCode = message.data.code;
             const result = await parseQSharp(pendingCode);
             console.log('Q# Parse Result:', result);
+            lastParsedResult = result;
+
+            updateVisibility(result.qubitsDeclared);
+            populateQubitDropdown(result.qubitsList || []);
 
             if (webgpuState) {
-                const arrowResult = computeBlochArrow(result);
-                webgpuState.stepVectors = arrowResult.stepVectors || [];
-                webgpuState.targetVector = arrowResult.screenVector;
-                webgpuState.stepQueue = [];
+                if (currentMode === 'qsphere') {
+                    const qs = computeQsphere(result);
+                    const nodeVerts = qs.nodeVertices;
+                    if (nodeVerts.byteLength <= webgpuState.qnodeVertexBuffer.size) {
+                        webgpuState.device.queue.writeBuffer(webgpuState.qnodeVertexBuffer, 0, nodeVerts);
+                        webgpuState.qnodeVertexCount = nodeVerts.length / 6;
+                    }
+                    const ringVerts = qs.ringVertices;
+                    if (ringVerts.byteLength <= webgpuState.lineVertexBuffer.size) {
+                        webgpuState.device.queue.writeBuffer(webgpuState.lineVertexBuffer, 0, ringVerts);
+                        webgpuState.lineVertexCount = ringVerts.length / 6;
+                    }
+                    rebuildQsphereLabels(qs.points, qs.N);
+                } else {
+                    const arrowResult = computeBlochArrow(result, selectedQubitIndex);
+                    webgpuState.stepVectors = arrowResult.stepVectors || [];
+                    webgpuState.targetVector = arrowResult.screenVector;
+                    webgpuState.stepQueue = [];
+                }
             }
         }
         if (webgpuState) {

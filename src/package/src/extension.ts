@@ -101,7 +101,7 @@ export function activate(context: vscode.ExtensionContext) {
                     const range = new vscode.Range(line, 0, line, 0);
                     lenses.push(
                         new vscode.CodeLens(range, {
-                            title: 'Qshere',
+                            title: 'State',
                             command: 'qsphere.openVisualizer',
                             tooltip: 'Click to open Qsphere visualizer panel for this operation'
                         })
@@ -129,6 +129,7 @@ function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Web
     const fragmentShaderPath = path.join(context.extensionPath, 'src', 'shader', 'fragment.wgsl');
     const arrowShaderPath = path.join(context.extensionPath, 'src', 'shader', 'fragment_arrow.wgsl');
     const linesShaderPath = path.join(context.extensionPath, 'src', 'shader', 'fragment_lines.wgsl');
+    const qnodesShaderPath = path.join(context.extensionPath, 'src', 'shader', 'fragment_qnodes.wgsl');
     const testQsPath = path.join(context.extensionPath, 'src', 'test.qs');
 
     const template = fs.readFileSync(templatePath, 'utf8');
@@ -136,11 +137,14 @@ function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Web
     const wasmParserUri = webview.asWebviewUri(vscode.Uri.file(wasmParserPath)).toString();
     const jsUri = webview.asWebviewUri(vscode.Uri.file(jsPath)).toString();
     const mathJsUri = webview.asWebviewUri(vscode.Uri.file(mathJsPath)).toString();
+    const gatesUri = webview.asWebviewUri(vscode.Uri.file(path.join(context.extensionPath, 'src', 'script', 'gates.js'))).toString();
     const blochVectorUri = webview.asWebviewUri(vscode.Uri.file(blochVectorPath)).toString();
+    const qsphereVectorUri = webview.asWebviewUri(vscode.Uri.file(path.join(context.extensionPath, 'src', 'script', 'qsphereVector.js'))).toString();
     const vertexShaderUri = webview.asWebviewUri(vscode.Uri.file(vertexShaderPath)).toString();
     const fragmentShaderUri = webview.asWebviewUri(vscode.Uri.file(fragmentShaderPath)).toString();
     const arrowShaderUri = webview.asWebviewUri(vscode.Uri.file(arrowShaderPath)).toString();
     const linesShaderUri = webview.asWebviewUri(vscode.Uri.file(linesShaderPath)).toString();
+    const qnodesShaderUri = webview.asWebviewUri(vscode.Uri.file(qnodesShaderPath)).toString();
     const testQsUri = webview.asWebviewUri(vscode.Uri.file(testQsPath)).toString();
     const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src ${webview.cspSource}; connect-src ${webview.cspSource};">`;
 
@@ -149,12 +153,15 @@ function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Web
         .replace('webview.css', cssUri)
         .replace('script/wasmParser.js', wasmParserUri)
         .replace('script/math.js', mathJsUri)
+        .replace('script/gates.js', gatesUri)
         .replace('script/blochVector.js', blochVectorUri)
+        .replace('script/qsphereVector.js', qsphereVectorUri)
         .replace('script/webview.js', jsUri)
         .replace('shader/vertex.wgsl', vertexShaderUri)
         .replace('shader/fragment.wgsl', fragmentShaderUri)
         .replace('shader/fragment_arrow.wgsl', arrowShaderUri)
         .replace('shader/fragment_lines.wgsl', linesShaderUri)
+        .replace('shader/fragment_qnodes.wgsl', qnodesShaderUri)
         .replace('test.qs', testQsUri);
 }
 

@@ -54,24 +54,15 @@ function parseAngle(argStr) {
         function parsePrimary() {
             if (pos >= tokens.length) return 0;
             const token = tokens[pos];
-            if (token.type === 'op' && token.value === '-') {
-                pos++;
-                return -parsePrimary();
-            }
-            if (token.type === 'op' && token.value === '+') {
-                pos++;
-                return parsePrimary();
-            }
+            if (token.type === 'op' && token.value === '-') { pos++; return -parsePrimary(); }
+            if (token.type === 'op' && token.value === '+') { pos++; return parsePrimary(); }
             if (token.type === 'op' && token.value === '(') {
                 pos++;
                 const val = parseAddSub();
                 if (pos < tokens.length && tokens[pos].value === ')') pos++;
                 return val;
             }
-            if (token.type === 'num') {
-                pos++;
-                return token.value;
-            }
+            if (token.type === 'num') { pos++; return token.value; }
             return 0;
         }
 
@@ -81,8 +72,7 @@ function parseAngle(argStr) {
                 const op = tokens[pos].value;
                 pos++;
                 const right = parsePrimary();
-                if (op === '*') left = left * right;
-                else if (op === '/') left = right !== 0 ? left / right : 0;
+                left = op === '*' ? left * right : (right !== 0 ? left / right : 0);
             }
             return left;
         }
@@ -93,8 +83,7 @@ function parseAngle(argStr) {
                 const op = tokens[pos].value;
                 pos++;
                 const right = parseMulDiv();
-                if (op === '+') left = left + right;
-                else if (op === '-') left = left - right;
+                left = op === '+' ? left + right : left - right;
             }
             return left;
         }
@@ -114,10 +103,7 @@ function findMatchingParen(code, startIdx) {
     let depth = 0;
     for (let i = startIdx; i < code.length; i++) {
         if (code[i] === '(') depth++;
-        else if (code[i] === ')') {
-            depth--;
-            if (depth === 0) return i;
-        }
+        else if (code[i] === ')') { depth--; if (depth === 0) return i; }
     }
     return -1;
 }
@@ -126,12 +112,62 @@ function findMatchingBrace(code, startIdx) {
     let depth = 0;
     for (let i = startIdx; i < code.length; i++) {
         if (code[i] === '{') depth++;
-        else if (code[i] === '}') {
-            depth--;
-            if (depth === 0) return i;
-        }
+        else if (code[i] === '}') { depth--; if (depth === 0) return i; }
     }
     return -1;
+}
+
+function findDeclaredQubits(blockCode) {
+    const declared = new Set();
+    const useRegex = /\buse\s+(?:([A-Za-z0-9_]+)|\(([^)]+)\))\s*=/gi;
+    let match;
+    while ((match = useRegex.exec(blockCode)) !== null) {
+        if (match[1]) {
+            declared.add(match[1].trim());
+        } else if (match[2]) {
+            match[2].split(',').forEach(v => { declared.add(v.trim()); });
+        }
+    }
+    return declared;
+}
+
+function buildQubitsList(blockCode) {
+    const entries = [];
+
+    const singleRe = /\buse\s+([A-Za-z0-9_]+)\s*=\s*Qubit\s*\(\s*\)/gi;
+    const arrayRe = /\buse\s+([A-Za-z0-9_]+)\s*=\s*Qubit\s*\[\s*(\d+)\s*\]/gi;
+    const tupleRe = /\buse\s+\(([^)]+)\)\s*=/gi;
+    let m;
+
+    while ((m = singleRe.exec(blockCode)) !== null) {
+        entries.push({ pos: m.index, type: 'single', name: m[1] });
+    }
+    while ((m = arrayRe.exec(blockCode)) !== null) {
+        entries.push({ pos: m.index, type: 'array', name: m[1], size: parseInt(m[2], 10) });
+    }
+    while ((m = tupleRe.exec(blockCode)) !== null) {
+        const names = m[1].split(',').map(v => v.trim()).filter(v => v.length > 0);
+        entries.push({ pos: m.index, type: 'tuple', names });
+    }
+
+    entries.sort((a, b) => a.pos - b.pos);
+
+    const list = [];
+    for (const entry of entries) {
+        if (entry.type === 'single') {
+            list.push(entry.name);
+        } else if (entry.type === 'array') {
+            for (let i = 0; i < entry.size; i++) list.push(`${entry.name}[${i}]`);
+        } else {
+            for (const name of entry.names) list.push(name);
+        }
+    }
+    return list;
+}
+
+function resolveTargetIndex(targetStr, qubitsList) {
+    const normalized = targetStr.trim().replace(/\s+/g, '');
+    return qubitsList.indexOf(normalized);
 }
 
 class QSharpWasmParser {
@@ -139,8 +175,7 @@ class QSharpWasmParser {
         this.wasmInstance = null;
     }
 
-    async init() {
-    }
+    async init() {}
 
     extractOperationDefinitions(code) {
         const opDefs = new Map();
@@ -175,7 +210,7 @@ class QSharpWasmParser {
 
     parse(code) {
         if (!code || typeof code !== 'string') {
-            return { entryPointFound: false, qubitsDeclared: 0, operations: [] };
+            return { entryPointFound: false, qubitsDeclared: 0, qubitsList: [], operations: [] };
         }
 
         const stripped = stripLineComments(code);
@@ -191,20 +226,24 @@ class QSharpWasmParser {
 
         const executableCode = stripped.substring(startIdx);
 
-        let qubitsDeclared = 0;
-        const qubitRegex = /use\s+[A-Za-z0-9_,\s=]+\s*=\s*Qubit\s*(?:\[\s*(\d+)\s*\]|\(\s*\))/gi;
-        let match;
-        while ((match = qubitRegex.exec(executableCode)) !== null) {
-            if (match[1]) qubitsDeclared += parseInt(match[1], 10);
-            else qubitsDeclared += 1;
+        const customOpDefs = this.extractOperationDefinitions(stripped);
+
+        let entryBody = executableCode;
+        if (entryPointFound) {
+            const entryOpMatch = /operation\s+([A-Za-z0-9_]+)/.exec(executableCode);
+            if (entryOpMatch && customOpDefs.has(entryOpMatch[1])) {
+                entryBody = customOpDefs.get(entryOpMatch[1]).body;
+            }
         }
 
-        const customOpDefs = this.extractOperationDefinitions(stripped);
+        const qubitsList = buildQubitsList(entryBody);
+        const qubitsDeclared = qubitsList.length;
+
         const operations = [];
         const primitiveGates = new Set(['H', 'X', 'Y', 'Z', 'S', 'T', 'I', 'Rx', 'Ry', 'Rz', 'R1']);
         const rotGates = new Set(['Rx', 'Ry', 'Rz', 'R1']);
 
-        const evaluateBlock = (blockCode, paramBindings, callStack) => {
+        const evaluateBlock = (blockCode, paramBindings, callStack, validQubits) => {
             if (callStack.size > 20) return;
 
             let codeToProcess = blockCode;
@@ -214,6 +253,10 @@ class QSharpWasmParser {
                     codeToProcess = codeToProcess.replace(re, argVal);
                 });
             }
+
+            const localValidQubits = new Set(validQubits);
+            const blockDeclared = findDeclaredQubits(codeToProcess);
+            blockDeclared.forEach(q => localValidQubits.add(q));
 
             const callFinder = /\b([A-Za-z0-9_]+)\s*\(/g;
             let callMatch;
@@ -238,22 +281,22 @@ class QSharpWasmParser {
                         if (!isValidAngleExpr(argStr)) continue;
                         if (!isValidTarget(targetStr)) continue;
 
-                        let target = 0;
-                        const arrayMatch = /[A-Za-z0-9_]+\s*\[\s*(\d+)\s*\]/.exec(targetStr);
-                        if (arrayMatch) target = parseInt(arrayMatch[1], 10);
+                        const targetVar = targetStr.split('[')[0].trim();
+                        if (!localValidQubits.has(targetVar)) continue;
 
-                        operations.push({
-                            operation: funcName,
-                            angle: parseAngle(argStr),
-                            target
-                        });
+                        const target = resolveTargetIndex(targetStr, qubitsList);
+                        if (target === -1) continue;
+
+                        operations.push({ operation: funcName, angle: parseAngle(argStr), target });
 
                     } else {
                         if (!isValidTarget(innerArgs)) continue;
 
-                        let target = 0;
-                        const arrayMatch = /[A-Za-z0-9_]+\s*\[\s*(\d+)\s*\]/.exec(innerArgs);
-                        if (arrayMatch) target = parseInt(arrayMatch[1], 10);
+                        const targetVar = innerArgs.split('[')[0].trim();
+                        if (!localValidQubits.has(targetVar)) continue;
+
+                        const target = resolveTargetIndex(innerArgs, qubitsList);
+                        if (target === -1) continue;
 
                         operations.push({ operation: funcName, angle: 0, target });
                     }
@@ -275,22 +318,14 @@ class QSharpWasmParser {
                     const newStack = new Set(callStack);
                     newStack.add(funcName);
 
-                    evaluateBlock(customDef.body, childBindings, newStack);
+                    evaluateBlock(customDef.body, childBindings, newStack, localValidQubits);
                 }
             }
         };
 
-        let entryBody = executableCode;
-        if (entryPointFound) {
-            const entryOpMatch = /operation\s+([A-Za-z0-9_]+)/.exec(executableCode);
-            if (entryOpMatch && customOpDefs.has(entryOpMatch[1])) {
-                entryBody = customOpDefs.get(entryOpMatch[1]).body;
-            }
-        }
+        evaluateBlock(entryBody, new Map(), new Set(['entry']), new Set());
 
-        evaluateBlock(entryBody, new Map(), new Set(['entry']));
-
-        return { entryPointFound, qubitsDeclared, operations };
+        return { entryPointFound, qubitsDeclared, qubitsList, operations };
     }
 }
 
