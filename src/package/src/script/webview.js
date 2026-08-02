@@ -7,6 +7,32 @@ let currentMode = 'bloch';
 let lastParsedResult = null;
 let selectedQubitIndex = 0;
 let selectedQubitName = null;
+let currentQubitsList = [];
+let miniRenderers = [];
+const qubitSphereSize = 270;
+
+function createQubitSphereStage(card, canvasElement) {
+    const stage = document.createElement('div');
+    stage.className = 'qubit-sphere-stage';
+
+    const labels = document.createElement('div');
+    labels.className = 'qubit-bloch-labels';
+    const labelNames = [
+        ['zero', '|0⟩'], ['one', '|1⟩'], ['plus', '|+⟩'],
+        ['minus', '|-⟩'], ['i-plus', '|+i⟩'], ['i-minus', '|-i⟩']
+    ];
+    for (const [name, text] of labelNames) {
+        const label = document.createElement('div');
+        label.className = `qubit-bloch-label label-${name}`;
+        label.textContent = text;
+        labels.appendChild(label);
+    }
+
+    stage.appendChild(canvasElement);
+    stage.appendChild(labels);
+    card.appendChild(stage);
+    return { stage, labels };
+}
 
 function setStatus(message) {
     if (statusText) statusText.textContent = '';
@@ -102,6 +128,281 @@ function drawFallbackBloch(screenVector) {
 function drawFallbackResult(result, targetQubit = 0) {
     const arrowResult = computeBlochArrow(result, targetQubit);
     drawFallbackBloch(arrowResult.screenVector);
+}
+
+function drawMiniBlochSphere(canvasElement, screenVector, label) {
+    const context = canvasElement.getContext('2d');
+    if (!context) return;
+
+    const width = Math.max(72, canvasElement.width || 96);
+    const height = Math.max(72, canvasElement.height || 96);
+    canvasElement.width = width;
+    canvasElement.height = height;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const radius = Math.min(width, height) * 0.32;
+    const [x, y, z] = screenVector || [0, 1, 0];
+
+    context.clearRect(0, 0, width, height);
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+
+    context.save();
+    context.translate(centerX + 2, centerY + 5);
+    context.beginPath();
+    context.ellipse(0, 0, radius * 0.96, radius * 0.74, 0, 0, Math.PI * 2);
+    context.fillStyle = 'rgba(0, 0, 0, 0.18)';
+    context.fill();
+    context.restore();
+
+    const sphereGradient = context.createRadialGradient(
+        centerX - radius * 0.28,
+        centerY - radius * 0.32,
+        radius * 0.1,
+        centerX,
+        centerY,
+        radius
+    );
+    sphereGradient.addColorStop(0, '#f8f8ff');
+    sphereGradient.addColorStop(0.45, '#a9bde7');
+    sphereGradient.addColorStop(1, '#4a63a8');
+
+    context.beginPath();
+    context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    context.fillStyle = sphereGradient;
+    context.fill();
+
+    context.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+    context.lineWidth = 1.2;
+    context.stroke();
+
+    context.beginPath();
+    context.arc(centerX - radius * 0.24, centerY - radius * 0.24, radius * 0.24, 0.2, 2.1);
+    context.strokeStyle = 'rgba(255, 255, 255, 0.34)';
+    context.lineWidth = 1.3;
+    context.stroke();
+
+    const tipX = centerX + x * radius * 0.78;
+    const tipY = centerY - z * radius * 0.78;
+    const angle = Math.atan2(tipY - centerY, tipX - centerX);
+    context.strokeStyle = '#f8f9ff';
+    context.fillStyle = '#f8f9ff';
+    context.lineWidth = 1.7;
+    context.beginPath();
+    context.moveTo(centerX, centerY);
+    context.lineTo(tipX, tipY);
+    context.stroke();
+    context.beginPath();
+    context.moveTo(tipX, tipY);
+    context.lineTo(tipX - Math.cos(angle - 0.48) * width / 18, tipY - Math.sin(angle - 0.48) * width / 18);
+    context.lineTo(tipX - Math.cos(angle + 0.48) * width / 18, tipY - Math.sin(angle + 0.48) * width / 18);
+    context.closePath();
+    context.fill();
+
+    context.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+    context.lineWidth = 0.9;
+    context.beginPath();
+    context.moveTo(centerX - radius * 0.68, centerY);
+    context.lineTo(centerX + radius * 0.68, centerY);
+    context.moveTo(centerX, centerY - radius * 0.68);
+    context.lineTo(centerX, centerY + radius * 0.68);
+    context.stroke();
+
+    context.fillStyle = '#d9d9e3';
+    context.font = '10px sans-serif';
+    context.textAlign = 'center';
+    context.fillText(label || '', centerX, height - 8);
+}
+
+function renderQubitColumn(result) {
+    const column = document.getElementById('qubit-column');
+    if (!column) return;
+
+    const qubitsList = result?.qubitsList || [];
+    const count = Math.max(qubitsList.length, result?.qubitsDeclared || 0);
+    currentQubitsList = qubitsList;
+    column.innerHTML = '';
+
+    for (let i = 0; i < count; i++) {
+        const card = document.createElement('div');
+        card.className = 'qubit-mini';
+
+        const label = document.createElement('div');
+        label.className = 'qubit-mini-label';
+        label.textContent = `Qubit ${i}`;
+
+        const canvas = document.createElement('canvas');
+        canvas.className = 'qubit-mini-canvas';
+        canvas.width = qubitSphereSize;
+        canvas.height = qubitSphereSize;
+
+        card.appendChild(label);
+        createQubitSphereStage(card, canvas);
+        column.appendChild(card);
+
+        const arrowResult = computeBlochArrow(result, i);
+        drawMiniBlochSphere(canvas, arrowResult.screenVector, qubitsList[i] || `q${i}`);
+    }
+}
+
+function destroyMiniRenderers() {
+    for (const renderer of miniRenderers) {
+        renderer.uniformBuffer?.destroy();
+        renderer.arrowVertexBuffer?.destroy();
+    }
+    miniRenderers = [];
+}
+
+async function createMiniRenderer(canvasElement, result, qubitIndex, state, previousVector) {
+    const context = canvasElement.getContext('webgpu');
+    if (!context) return null;
+
+    const format = state.format;
+    context.configure({ device: state.device, format, alphaMode: 'premultiplied' });
+
+    const aspect = canvasElement.width / canvasElement.height;
+    const projMatrix = mult(
+        createPerspectiveMatrix(Math.PI / 4, aspect, 0.1, 100),
+        createTranslationMatrix(0, 0, -3)
+    );
+    const modelMatrix = rotateMatrix(0.35, -0.65, 0, projMatrix);
+    const uniformBuffer = state.device.createBuffer({
+        label: `Qubit ${qubitIndex} Uniform Buffer`,
+        size: modelMatrix.byteLength,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    });
+    state.device.queue.writeBuffer(uniformBuffer, 0, modelMatrix);
+
+    const bindGroup = state.device.createBindGroup({
+        layout: state.bindGroupLayout,
+        entries: [{ binding: 0, resource: { buffer: uniformBuffer } }]
+    });
+
+    const arrowResult = computeBlochArrow(result, qubitIndex);
+    const arrowVertices = arrowResult.vertices;
+    const stepVectors = arrowResult.stepVectors || [];
+    const finalVector = arrowResult.screenVector || [0, 1, 0];
+    const currentVector = previousVector || stepVectors[0] || finalVector;
+    const targetVector = previousVector ? finalVector : (stepVectors[0] || finalVector);
+    const stepQueue = previousVector ? [] : stepVectors.slice(1);
+    const arrowVertexBuffer = state.device.createBuffer({
+        label: `Qubit ${qubitIndex} Arrow Buffer`,
+        size: Math.max(arrowVertices.byteLength, 64 * 1024),
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+    });
+    if (arrowVertices.byteLength > 0) {
+        state.device.queue.writeBuffer(arrowVertexBuffer, 0, arrowVertices);
+    }
+
+    const rotation = [0.3, 0.0, 0.0];
+    let dragging = false;
+    let previousX = 0;
+    canvasElement.addEventListener('mousedown', event => {
+        dragging = true;
+        previousX = event.clientX;
+    });
+    canvasElement.addEventListener('mousemove', event => {
+        if (!dragging) return;
+        rotation[1] += (event.clientX - previousX) * 0.005;
+        previousX = event.clientX;
+    });
+    canvasElement.addEventListener('mouseup', () => { dragging = false; });
+    canvasElement.addEventListener('mouseleave', () => { dragging = false; });
+
+    return {
+        canvas: canvasElement,
+        stage: canvasElement.parentElement,
+        labels: [...canvasElement.parentElement.querySelectorAll('.qubit-bloch-label')],
+        device: state.device,
+        context,
+        bindGroup,
+        uniformBuffer,
+        arrowVertexBuffer,
+        arrowVertexCount: arrowVertices.length / 6,
+        arrowVector: arrowResult.screenVector,
+        currentVector: [...currentVector],
+        targetVector: [...targetVector],
+        stepQueue,
+        projMatrix,
+        rotation,
+        qubitIndex
+    };
+}
+
+function renderMiniRenderer(renderer, state) {
+    const current = renderer.currentVector;
+    const target = renderer.targetVector;
+    if (current[0] !== target[0] || current[1] !== target[1] || current[2] !== target[2]) {
+        const nextVector = interpolateVector(current, target, 0.25);
+        renderer.currentVector = nextVector;
+        const arrowVertices = buildArrowVertices(nextVector);
+        if (arrowVertices.byteLength > 0) {
+            renderer.device.queue.writeBuffer(renderer.arrowVertexBuffer, 0, arrowVertices);
+        }
+        renderer.arrowVertexCount = arrowVertices.length / 6;
+    } else if (renderer.stepQueue.length > 0) {
+        renderer.targetVector = renderer.stepQueue.shift();
+    }
+
+    const modelMatrix = rotateMatrix(...renderer.rotation, renderer.projMatrix);
+    renderer.device.queue.writeBuffer(renderer.uniformBuffer, 0, modelMatrix);
+    updateMiniLabels(renderer, modelMatrix);
+
+    const commandEncoder = renderer.device.createCommandEncoder();
+    const passEncoder = commandEncoder.beginRenderPass({
+        colorAttachments: [{
+            view: renderer.context.getCurrentTexture().createView(),
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: 'clear',
+            storeOp: 'store'
+        }]
+    });
+
+    passEncoder.setBindGroup(0, renderer.bindGroup);
+    passEncoder.setPipeline(state.pipeline);
+    passEncoder.setVertexBuffer(0, state.vertexBuffer);
+    passEncoder.draw(state.vertexCount);
+
+    passEncoder.setPipeline(state.linePipeline);
+    passEncoder.setVertexBuffer(0, state.lineVertexBuffer);
+    passEncoder.draw(state.lineVertexCount);
+
+    if (renderer.arrowVertexCount > 0) {
+        passEncoder.setPipeline(state.arrowPipeline);
+        passEncoder.setVertexBuffer(0, renderer.arrowVertexBuffer);
+        passEncoder.draw(renderer.arrowVertexCount);
+    }
+
+    passEncoder.end();
+    renderer.device.queue.submit([commandEncoder.finish()]);
+}
+
+function updateMiniLabels(renderer, modelMatrix) {
+    const width = renderer.stage.clientWidth;
+    const height = renderer.stage.clientHeight;
+    for (let i = 0; i < blochLabelDefs.length; i++) {
+        const label = renderer.labels[i];
+        if (!label) continue;
+        const point = projectPoint(blochLabelDefs[i].pos, modelMatrix, width, height);
+        if (point) {
+            label.style.transform = `translate(-50%, -50%) translate(${point[0]}px, ${point[1]}px)`;
+            label.style.display = 'block';
+        } else {
+            label.style.display = 'none';
+        }
+    }
+}
+
+async function renderMiniQubitColumn(result) {
+    if (!webgpuState) return;
+    const previousVectors = miniRenderers.map(renderer => renderer.currentVector);
+    destroyMiniRenderers();
+    const canvases = [...document.querySelectorAll('.qubit-mini-canvas')];
+    miniRenderers = (await Promise.all(
+        canvases.map((canvasElement, index) =>
+            createMiniRenderer(canvasElement, result, index, webgpuState, previousVectors[index])
+        )
+    )).filter(Boolean);
 }
 
 async function initWebGPU() {
@@ -375,7 +676,7 @@ async function initWebGPU() {
 
     return {
         device, context, pipeline, vertexBuffer, vertexCount,
-        bindGroup, vertexUniformBuffer, projMatrix, buildProjMatrix,
+        bindGroup, bindGroupLayout, vertexUniformBuffer, projMatrix, buildProjMatrix, format,
         arrowPipeline, arrowVertexBuffer, arrowVertexCount,
         linePipeline, lineVertexBuffer, lineVertexCount,
         qnodePipeline, qnodeVertexBuffer, qnodeVertexCount,
@@ -438,7 +739,6 @@ canvas.addEventListener('mousedown', e => {
     isDragging = true;
     previousMousePosition = { x: e.clientX, y: e.clientY };
 });
-
 window.addEventListener('mousemove', e => {
     if (!isDragging) return;
     const deltaX = e.clientX - previousMousePosition.x;
@@ -549,6 +849,9 @@ function frame() {
 
         updateLabels(modelMatrix);
         render(webgpuState);
+        for (const renderer of miniRenderers) {
+            renderMiniRenderer(renderer, webgpuState);
+        }
     }
     requestAnimationFrame(frame);
 }
@@ -557,6 +860,11 @@ initWebGPU()
 
     .then(state => {
         webgpuState = state;
+        if (lastParsedResult) {
+            populateQubitColumn(lastParsedResult).catch(error => {
+                console.error('Could not upgrade qubit spheres to WebGPU:', error);
+            });
+        }
         if (vscode) {
             vscode.postMessage({ command: 'ready' });
         }
@@ -566,6 +874,11 @@ initWebGPU()
         console.error(error);
         fallbackMode = true;
         drawFallbackResult(lastParsedResult || { states: [] }, selectedQubitIndex);
+        if (lastParsedResult) {
+            populateQubitColumn(lastParsedResult).catch(populateError => {
+                console.error('Could not render fallback qubit spheres:', populateError);
+            });
+        }
         setStatus('WebGPU setup failed.');
     });
 
@@ -580,112 +893,71 @@ window.addEventListener('resize', () => {
 function updateVisibility(qubitsDeclared) {
     const container = document.getElementById('container');
     const controls = document.getElementById('controls');
-    if (container) container.style.display = qubitsDeclared > 0 ? 'block' : 'none';
+    // The original single-sphere canvas is kept as an internal WebGPU surface
+    // for shader/device setup. The visible UI is the full-size sphere per qubit.
+    if (container) container.style.display = 'none';
     if (controls) controls.style.display = qubitsDeclared > 0 ? 'flex' : 'none';
 }
 
-function populateQubitDropdown(qubitsList) {
-    const sel = document.getElementById('qubit-select');
-    if (!sel) return;
-    const prevName = selectedQubitName;
-    sel.innerHTML = '';
-    for (let i = 0; i < qubitsList.length; i++) {
-        const opt = document.createElement('option');
-        opt.value = String(i);
-        opt.textContent = qubitsList[i];
-        sel.appendChild(opt);
-    }
-    const prevIdx = prevName !== null ? qubitsList.indexOf(prevName) : -1;
-    if (prevIdx !== -1) {
-        selectedQubitIndex = prevIdx;
-        sel.value = String(prevIdx);
-    } else {
-        selectedQubitIndex = 0;
-        sel.value = '0';
-    }
-    selectedQubitName = qubitsList[selectedQubitIndex] || null;
-}
+async function populateQubitColumn(result) {
+    const column = document.getElementById('qubit-column');
+    if (!column) return;
 
-const qubitSelect = document.getElementById('qubit-select');
-if (qubitSelect) {
-    qubitSelect.addEventListener('change', () => {
-        selectedQubitIndex = parseInt(qubitSelect.value, 10);
-        selectedQubitName = qubitSelect.options[qubitSelect.selectedIndex]
-            ? qubitSelect.options[qubitSelect.selectedIndex].textContent
-            : null;
-        if (webgpuState && lastParsedResult && currentMode === 'bloch') {
-            const arrowResult = computeBlochArrow(lastParsedResult, selectedQubitIndex);
-            const newVec = arrowResult.screenVector;
-            webgpuState.stepVectors = arrowResult.stepVectors || [];
-            webgpuState.targetVector = newVec;
-            webgpuState.currentVector = newVec;
-            webgpuState.stepQueue = [];
-            const arrowVerts = buildArrowVertices(newVec);
-            if (arrowVerts.byteLength > 0 && arrowVerts.byteLength <= webgpuState.arrowVertexBuffer.size) {
-                webgpuState.device.queue.writeBuffer(webgpuState.arrowVertexBuffer, 0, arrowVerts);
-            }
-            webgpuState.arrowVertexCount = arrowVerts.length / 6;
-            render(webgpuState);
-        }
-        if (fallbackMode && lastParsedResult) {
-            drawFallbackResult(lastParsedResult, selectedQubitIndex);
-        }
-    });
-}
+    const qubitsList = result?.qubitsList || [];
+    const count = Math.max(qubitsList.length, result?.qubitsDeclared || 0);
+    currentQubitsList = qubitsList;
 
-const modeBtn = document.querySelector('#mode-btn');
-if (modeBtn) {
-    modeBtn.addEventListener('click', () => {
-        currentMode = currentMode === 'bloch' ? 'qsphere' : 'bloch';
-        modeBtn.textContent = currentMode === 'bloch' ? 'Q-sphere' : 'Bloch';
-        if (webgpuState && lastParsedResult) {
-            if (currentMode === 'qsphere') {
-                const qs = computeQsphere(lastParsedResult);
-                const nodeVerts = qs.nodeVertices;
-                if (nodeVerts.byteLength <= webgpuState.qnodeVertexBuffer.size) {
-                    webgpuState.device.queue.writeBuffer(webgpuState.qnodeVertexBuffer, 0, nodeVerts);
-                    webgpuState.qnodeVertexCount = nodeVerts.length / 6;
-                }
-                const ringVerts = qs.ringVertices;
-                if (ringVerts.byteLength <= webgpuState.lineVertexBuffer.size) {
-                    webgpuState.device.queue.writeBuffer(webgpuState.lineVertexBuffer, 0, ringVerts);
-                    webgpuState.lineVertexCount = ringVerts.length / 6;
-                }
-                rebuildQsphereLabels(qs.points, qs.N);
-            } else {
-                const arrowResult = computeBlochArrow(lastParsedResult, selectedQubitIndex);
-                const arrowVerts = arrowResult.vertices;
-                if (arrowVerts.byteLength > 0 && arrowVerts.byteLength <= webgpuState.arrowVertexBuffer.size) {
-                    webgpuState.device.queue.writeBuffer(webgpuState.arrowVertexBuffer, 0, arrowVerts);
-                }
-                webgpuState.arrowVertexCount = arrowVerts.length / 6;
-                const lineVerts = buildSphereLines();
-                webgpuState.device.queue.writeBuffer(webgpuState.lineVertexBuffer, 0, lineVerts);
-                webgpuState.lineVertexCount = lineVerts.length / 6;
-                webgpuState.targetVector = arrowResult.screenVector;
-                webgpuState.currentVector = arrowResult.screenVector;
-            }
-            render(webgpuState);
+    column.innerHTML = '';
+    for (let i = 0; i < count; i++) {
+        const card = document.createElement('div');
+        card.className = 'qubit-mini';
+
+        const label = document.createElement('div');
+        label.className = 'qubit-mini-label';
+        label.textContent = `Qubit ${i}`;
+
+        const canvas = document.createElement('canvas');
+        canvas.className = 'qubit-mini-canvas';
+        canvas.width = qubitSphereSize;
+        canvas.height = qubitSphereSize;
+
+        card.appendChild(label);
+        createQubitSphereStage(card, canvas);
+        column.appendChild(card);
+
+        if (fallbackMode) {
+            const arrowResult = computeBlochArrow(result, i);
+            drawMiniBlochSphere(canvas, arrowResult.screenVector, qubitsList[i] || `q${i}`);
         }
-    });
+    }
+
+    if (count > 0) {
+        selectedQubitIndex = Math.min(selectedQubitIndex, count - 1);
+        selectedQubitName = currentQubitsList[selectedQubitIndex] || null;
+    }
+
+    await renderMiniQubitColumn(result);
 }
 
 let currentTargetOp = null;
+let sourceUpdateGeneration = 0;
 
 window.addEventListener('message', async event => {
     const message = event.data;
     if (message.command === 'init' || message.command === 'update') {
         if (message.data && message.data.code) {
+            const updateGeneration = ++sourceUpdateGeneration;
             pendingCode = message.data.code;
             if (message.data.targetOp !== undefined) {
                 currentTargetOp = message.data.targetOp;
             }
             const result = await parseQSharp(pendingCode, currentTargetOp);
+            if (updateGeneration !== sourceUpdateGeneration) return;
             console.log('Q# Parse Result:', result);
             lastParsedResult = result;
 
             updateVisibility(result.qubitsDeclared);
-            populateQubitDropdown(result.qubitsList || []);
+            await populateQubitColumn(result);
 
             if (webgpuState) {
                 if (currentMode === 'qsphere') {
@@ -717,17 +989,3 @@ window.addEventListener('message', async event => {
     }
 });
 
-const replayBtn = document.querySelector('#replay-btn');
-if (replayBtn) {
-    replayBtn.addEventListener('click', () => {
-        if (webgpuState && webgpuState.stepVectors && webgpuState.stepVectors.length > 0) {
-            const queue = webgpuState.stepVectors.map(v => [v[0], v[1], v[2]]);
-            webgpuState.currentVector = queue.shift();
-            webgpuState.targetVector = queue.length > 0 ? queue.shift() : webgpuState.currentVector;
-            webgpuState.stepQueue = queue;
-        } else if (webgpuState && webgpuState.targetVector) {
-            webgpuState.currentVector = [0, 1, 0];
-            webgpuState.stepQueue = [];
-        }
-    });
-}

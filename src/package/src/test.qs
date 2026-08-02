@@ -3,22 +3,14 @@ namespace QuantumApp {
     open Microsoft.Quantum.Intrinsic;
     @EntryPoint()
     operation Main() : Unit {
-        use q = Qubit();
-        use q2 = Qubit();
-        H(q);
+        use q = Qubit[2];
         test(q);
-        Ry(0.5, q);
-
-        H(q2);
-        CNOT(q2, q);
-        Reset(q);
-        Reset(q2);
+        ResetAll(q);
     }
 
-    operation test(q: Qubit) : Unit {
-        Ry(0.5, q);        
-        Ry(0.5, q);        
-        Ry(0.5, q);        
-        I(q);       
+    operation test(q: Qubit[]) : Unit {
+        H(q[0]);
+        X(q[1]);
+        H(q[1]);
     }
 }

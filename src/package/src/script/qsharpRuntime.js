@@ -122,6 +122,18 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
             if (step.id === StepResultId.Return) break;
         }
 
+        // Capture once more after stepping completes so the final operation's
+        // post-gate state is not lost when it is the last breakpoint.
+        const finalSnapshot = snapshotFromEntries(await debugService.captureQuantumState());
+        if (finalSnapshot && (!targetOp || finalSnapshot.qubits > 0)) {
+            result.qubitsDeclared = Math.max(result.qubitsDeclared, finalSnapshot.qubits);
+            const signature = snapshotSignature(finalSnapshot);
+            if (signature !== lastSignature) {
+                lastSignature = signature;
+                result.states.push(finalSnapshot);
+            }
+        }
+
         if (result.steps.length >= 10000 && !result.error) {
             result.error = 'Q# execution exceeded the 10,000-step safety limit.';
         }

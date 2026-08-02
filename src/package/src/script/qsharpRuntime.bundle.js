@@ -2038,6 +2038,15 @@ ${val.stack}`;
         }
         if (step.id === StepResultId.Return) break;
       }
+      const finalSnapshot = snapshotFromEntries(await debugService.captureQuantumState());
+      if (finalSnapshot && (!targetOp || finalSnapshot.qubits > 0)) {
+        result.qubitsDeclared = Math.max(result.qubitsDeclared, finalSnapshot.qubits);
+        const signature = snapshotSignature(finalSnapshot);
+        if (signature !== lastSignature) {
+          lastSignature = signature;
+          result.states.push(finalSnapshot);
+        }
+      }
       if (result.steps.length >= 1e4 && !result.error) {
         result.error = "Q# execution exceeded the 10,000-step safety limit.";
       }

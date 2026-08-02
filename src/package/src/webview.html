@@ -15,6 +15,7 @@
 </head>
 
 <body>
+    <h1 id="title">Qubit State Visualization</h1>
     <div id="container">
         <canvas id="canvas"
                 data-vertex-shader="shader/vertex.wgsl"
@@ -35,9 +36,7 @@
         <div id="qs-labels"></div>
     </div>
     <div id="controls">
-        <select id="qubit-select"></select>
-        <button id="replay-btn">Replay Animation</button>
-        <button id="mode-btn">Q-sphere</button>
+        <div id="qubit-column"></div>
     </div>
     <p id="status"></p>
 </body>
