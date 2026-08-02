@@ -1,6 +1,6 @@
 # Qsphere
 
 ## TODO
-[ ] Make a Bloch Sphere visualizer for n qubits
 
-[ ] Make a IBM style q-sphere
+- [ ] Make a Bloch sphere visualizer for n qubits
+- [ ] Make an IBM-style Q-sphere
