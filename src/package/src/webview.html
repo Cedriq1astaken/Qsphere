@@ -6,9 +6,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Qsphere Visualizer</title>
     <link rel="stylesheet" href="webview.css">
-    <script defer src="script/wasmParser.js"></script>
+    <script defer src="script/qsharpRuntime.bundle.js"></script>
+    <script defer src="script/qsharpRuntimeUi.js"></script>
     <script defer src="script/math.js"></script>
-    <script defer src="script/gates.js"></script>
     <script defer src="script/blochVector.js"></script>
     <script defer src="script/qsphereVector.js"></script>
     <script defer src="script/webview.js"></script>
@@ -22,6 +22,7 @@
                 data-arrow-shader="shader/fragment_arrow.wgsl"
                 data-lines-shader="shader/fragment_lines.wgsl"
                 data-qnodes-shader="shader/fragment_qnodes.wgsl"
+                data-qsharp-wasm="wasm/qsc_wasm_bg.wasm"
                 data-test-qs="test.qs"></canvas>
         <div id="bloch-labels">
             <div class="label" id="label-zero">|0⟩</div>

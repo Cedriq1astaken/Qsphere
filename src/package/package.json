@@ -42,13 +42,18 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "compile": "npm run bundle:webview && tsc -p ./",
+    "bundle:webview": "node build-webview.mjs",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.85.0",
+    "esbuild": "^0.28.1",
     "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "qsharp-lang": "^1.31.0"
   }
 }

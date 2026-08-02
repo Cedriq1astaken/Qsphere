@@ -33,6 +33,76 @@ function resizeCanvas() {
 }
 
 let pendingCode = null;
+let fallbackMode = false;
+
+function positionFallbackLabels() {
+    const positions = {
+        'label-zero': [0.5, 0.02],
+        'label-one': [0.5, 0.98],
+        'label-plus': [0.98, 0.5],
+        'label-minus': [0.02, 0.5],
+        'label-i-plus': [0.5, 0.76],
+        'label-i-minus': [0.5, 0.24]
+    };
+    const rect = canvas.getBoundingClientRect();
+    for (const [id, [x, y]] of Object.entries(positions)) {
+        const label = document.getElementById(id);
+        if (!label) continue;
+        label.style.display = 'block';
+        label.style.transform = `translate(-50%, -50%) translate(${rect.width * x}px, ${rect.height * y}px)`;
+    }
+}
+
+function drawFallbackBloch(screenVector) {
+    resizeCanvas();
+    const context = canvas.getContext('2d');
+    if (!context) return;
+
+    const width = canvas.width;
+    const height = canvas.height;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const radius = Math.min(width, height) * 0.38;
+    const [x, y] = screenVector || [0, 1];
+
+    context.clearRect(0, 0, width, height);
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+
+    context.strokeStyle = 'rgba(205, 205, 215, 0.72)';
+    context.lineWidth = Math.max(1, width / 320);
+    context.beginPath();
+    context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    context.moveTo(centerX - radius, centerY);
+    context.lineTo(centerX + radius, centerY);
+    context.moveTo(centerX, centerY - radius);
+    context.lineTo(centerX, centerY + radius);
+    context.stroke();
+
+    const tipX = centerX + x * radius;
+    const tipY = centerY - y * radius;
+    const angle = Math.atan2(tipY - centerY, tipX - centerX);
+    context.strokeStyle = '#f0f0f0';
+    context.fillStyle = '#f0f0f0';
+    context.lineWidth = Math.max(2, width / 150);
+    context.beginPath();
+    context.moveTo(centerX, centerY);
+    context.lineTo(tipX, tipY);
+    context.stroke();
+    context.beginPath();
+    context.moveTo(tipX, tipY);
+    context.lineTo(tipX - Math.cos(angle - 0.45) * width / 28, tipY - Math.sin(angle - 0.45) * width / 28);
+    context.lineTo(tipX - Math.cos(angle + 0.45) * width / 28, tipY - Math.sin(angle + 0.45) * width / 28);
+    context.closePath();
+    context.fill();
+
+    positionFallbackLabels();
+}
+
+function drawFallbackResult(result, targetQubit = 0) {
+    const arrowResult = computeBlochArrow(result, targetQubit);
+    drawFallbackBloch(arrowResult.screenVector);
+}
 
 async function initWebGPU() {
     let initialArrowData = null;
@@ -71,13 +141,17 @@ async function initWebGPU() {
     updateVisibility(initialQubits);
 
     if (!navigator.gpu) {
-        setStatus('WebGPU is not available in this browser.');
+        fallbackMode = true;
+        drawFallbackBloch(initialArrowData.screenVector);
+        setStatus('WebGPU is not available; using 2D fallback.');
         return undefined;
     }
 
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) {
-        setStatus('No WebGPU adapter found.');
+        fallbackMode = true;
+        drawFallbackBloch(initialArrowData.screenVector);
+        setStatus('No WebGPU adapter; using 2D fallback.');
         return undefined;
     }
 
@@ -486,6 +560,8 @@ initWebGPU()
     })
     .catch(error => {
         console.error(error);
+        fallbackMode = true;
+        drawFallbackResult(lastParsedResult || { states: [] }, selectedQubitIndex);
         setStatus('WebGPU setup failed.');
     });
 
@@ -544,6 +620,9 @@ if (qubitSelect) {
             webgpuState.device.queue.writeBuffer(webgpuState.arrowVertexBuffer, 0, arrowVerts);
             webgpuState.arrowVertexCount = arrowVerts.length / 6;
             render(webgpuState);
+        }
+        if (fallbackMode && lastParsedResult) {
+            drawFallbackResult(lastParsedResult, selectedQubitIndex);
         }
     });
 }
@@ -617,6 +696,8 @@ window.addEventListener('message', async event => {
                     webgpuState.targetVector = arrowResult.screenVector;
                     webgpuState.stepQueue = [];
                 }
+            } else if (fallbackMode) {
+                drawFallbackResult(result, selectedQubitIndex);
             }
         }
         if (webgpuState) {
