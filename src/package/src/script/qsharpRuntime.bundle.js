@@ -2010,10 +2010,13 @@ ${val.stack}`;
       const breakpointIds = breakpoints.map((breakpoint) => breakpoint.id);
       const events = { dispatchEvent: () => true };
       let skipNextSnapshot = false;
+      let targetOpWasActive = false;
       for (let stepNumber = 0; stepNumber < 1e4; stepNumber++) {
         const step = await debugService.evalNext(breakpointIds, events);
         const range = breakpoints.find((breakpoint) => breakpoint.id === step.value)?.range || null;
-        const isInsideTargetOp = !targetOp || !range || range.start.line >= targetOp.startLine && range.start.line <= targetOp.endLine;
+        const isTargetOpBreakpoint = Boolean(targetOp && range && range.start.line >= targetOp.startLine && range.start.line <= targetOp.endLine);
+        const isPostTargetOpSnapshot = Boolean(targetOp && targetOpWasActive && (!range || !isTargetOpBreakpoint));
+        const isInsideTargetOp = !targetOp || isTargetOpBreakpoint || isPostTargetOpSnapshot;
         const isResetLine = range && resetLines.has(range.start.line);
         const snapshot = snapshotFromEntries(await debugService.captureQuantumState());
         if (snapshot && isInsideTargetOp && !skipNextSnapshot) {
@@ -2024,6 +2027,8 @@ ${val.stack}`;
             result.states.push(snapshot);
           }
         }
+        if (isTargetOpBreakpoint) targetOpWasActive = true;
+        if (isPostTargetOpSnapshot) targetOpWasActive = false;
         skipNextSnapshot = Boolean(isResetLine);
         result.steps.push({
           resultId: step.id,

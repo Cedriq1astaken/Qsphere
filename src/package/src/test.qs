@@ -1,4 +1,5 @@
 namespace QuantumApp {
+    import Std.Math.PI;
     import Std.Diagnostics.DumpMachine;
     open Microsoft.Quantum.Intrinsic;
     @EntryPoint()
@@ -9,8 +10,8 @@ namespace QuantumApp {
     }
 
     operation test(q: Qubit[]) : Unit {
-        H(q[0]);
-        X(q[1]);
-        H(q[1]);
+        Ry(PI() / 3.0 ,q[0]);
+        CNOT(q[0], q[1]);
+        DumpMachine();
     }
 }

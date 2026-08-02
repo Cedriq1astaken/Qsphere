@@ -11,6 +11,12 @@ let currentQubitsList = [];
 let miniRenderers = [];
 const qubitSphereSize = 270;
 
+function vectorsClose(a, b, epsilon = 1e-3) {
+    return Math.abs(a[0] - b[0]) < epsilon
+        && Math.abs(a[1] - b[1]) < epsilon
+        && Math.abs(a[2] - b[2]) < epsilon;
+}
+
 function createQubitSphereStage(card, canvasElement) {
     const stage = document.createElement('div');
     stage.className = 'qubit-sphere-stage';
@@ -332,9 +338,9 @@ async function createMiniRenderer(canvasElement, result, qubitIndex, state, prev
 function renderMiniRenderer(renderer, state) {
     const current = renderer.currentVector;
     const target = renderer.targetVector;
-    if (current[0] !== target[0] || current[1] !== target[1] || current[2] !== target[2]) {
+    if (!vectorsClose(current, target)) {
         const nextVector = interpolateVector(current, target, 0.25);
-        renderer.currentVector = nextVector;
+        renderer.currentVector = vectorsClose(nextVector, target) ? [...target] : nextVector;
         const arrowVertices = buildArrowVertices(nextVector);
         if (arrowVertices.byteLength > 0) {
             renderer.device.queue.writeBuffer(renderer.arrowVertexBuffer, 0, arrowVertices);
@@ -829,9 +835,9 @@ function frame() {
         if (currentMode === 'bloch' && webgpuState.currentVector && webgpuState.targetVector) {
             const cur = webgpuState.currentVector;
             const tgt = webgpuState.targetVector;
-            if (cur[0] !== tgt[0] || cur[1] !== tgt[1] || cur[2] !== tgt[2]) {
+            if (!vectorsClose(cur, tgt)) {
                 const nextVec = interpolateVector(cur, tgt, 0.25);
-                webgpuState.currentVector = nextVec;
+                webgpuState.currentVector = vectorsClose(nextVec, tgt) ? [...tgt] : nextVec;
                 const arrowVertices = buildArrowVertices(nextVec);
                 if (arrowVertices.byteLength > 0) {
                     webgpuState.device.queue.writeBuffer(

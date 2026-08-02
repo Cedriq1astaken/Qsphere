@@ -84,13 +84,16 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
         const events = { dispatchEvent: () => true };
 
         let skipNextSnapshot = false;
+        let targetOpWasActive = false;
 
         for (let stepNumber = 0; stepNumber < 10000; stepNumber++) {
             const step = await debugService.evalNext(breakpointIds, events);
             const range = breakpoints.find(breakpoint => breakpoint.id === step.value)?.range || null;
-            const isInsideTargetOp = !targetOp || !range || (
-                range.start.line >= targetOp.startLine && range.start.line <= targetOp.endLine
-            );
+            const isTargetOpBreakpoint = Boolean(targetOp && range &&
+                range.start.line >= targetOp.startLine && range.start.line <= targetOp.endLine);
+            const isPostTargetOpSnapshot = Boolean(targetOp && targetOpWasActive &&
+                (!range || !isTargetOpBreakpoint));
+            const isInsideTargetOp = !targetOp || isTargetOpBreakpoint || isPostTargetOpSnapshot;
 
             const isResetLine = range && resetLines.has(range.start.line);
 
@@ -104,6 +107,9 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
                     result.states.push(snapshot);
                 }
             }
+
+            if (isTargetOpBreakpoint) targetOpWasActive = true;
+            if (isPostTargetOpSnapshot) targetOpWasActive = false;
 
             // Flag to skip the post-Reset state snapshot so Reset operations are invisible
             skipNextSnapshot = Boolean(isResetLine);
@@ -132,6 +138,7 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
                 lastSignature = signature;
                 result.states.push(finalSnapshot);
             }
+
         }
 
         if (result.steps.length >= 10000 && !result.error) {
