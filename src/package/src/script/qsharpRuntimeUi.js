@@ -7,14 +7,14 @@
 
     function showResult(result) {
         const status = document.querySelector('#status');
-        if (status) status.textContent = result?.error ? `Q# error: ${result.error}` : '';
+        if (status) status.textContent = '';
         return result;
     }
 
-    window.parseQSharp = async function (source) {
+    window.parseQSharp = async function (source, targetOp) {
         const requestId = ++requestGeneration;
         try {
-            const result = await parseQSharp(source);
+            const result = await parseQSharp(source, targetOp);
             if (requestId !== requestGeneration) {
                 return lastSuccessfulResult || result;
             }

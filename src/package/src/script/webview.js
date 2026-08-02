@@ -9,7 +9,7 @@ let selectedQubitIndex = 0;
 let selectedQubitName = null;
 
 function setStatus(message) {
-    statusText.textContent = message;
+    if (statusText) statusText.textContent = '';
 }
 
 async function loadShader(path) {
@@ -345,11 +345,13 @@ async function initWebGPU() {
     const arrowVertices = initialArrowData.vertices;
     const arrowVertexBuffer = device.createBuffer({
         label: 'Arrow Vertex Buffer',
-        size: arrowVertices.byteLength,
+        size: Math.max(arrowVertices.byteLength, 512 * 1024),
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
     });
     const arrowVertexCount = arrowVertices.length / 6;
-    device.queue.writeBuffer(arrowVertexBuffer, 0, arrowVertices);
+    if (arrowVertices.byteLength > 0) {
+        device.queue.writeBuffer(arrowVertexBuffer, 0, arrowVertices);
+    }
 
     const qnodeVertexBuffer = device.createBuffer({
         label: 'QNode Vertex Buffer',
@@ -531,9 +533,11 @@ function frame() {
                 const nextVec = interpolateVector(cur, tgt, 0.25);
                 webgpuState.currentVector = nextVec;
                 const arrowVertices = buildArrowVertices(nextVec);
-                webgpuState.device.queue.writeBuffer(
-                    webgpuState.arrowVertexBuffer, 0, arrowVertices
-                );
+                if (arrowVertices.byteLength > 0) {
+                    webgpuState.device.queue.writeBuffer(
+                        webgpuState.arrowVertexBuffer, 0, arrowVertices
+                    );
+                }
                 webgpuState.arrowVertexCount = arrowVertices.length / 6;
             } else if (webgpuState.stepQueue && webgpuState.stepQueue.length > 0) {
                 webgpuState.targetVector = webgpuState.stepQueue.shift();
@@ -617,7 +621,9 @@ if (qubitSelect) {
             webgpuState.currentVector = newVec;
             webgpuState.stepQueue = [];
             const arrowVerts = buildArrowVertices(newVec);
-            webgpuState.device.queue.writeBuffer(webgpuState.arrowVertexBuffer, 0, arrowVerts);
+            if (arrowVerts.byteLength > 0 && arrowVerts.byteLength <= webgpuState.arrowVertexBuffer.size) {
+                webgpuState.device.queue.writeBuffer(webgpuState.arrowVertexBuffer, 0, arrowVerts);
+            }
             webgpuState.arrowVertexCount = arrowVerts.length / 6;
             render(webgpuState);
         }
@@ -649,10 +655,10 @@ if (modeBtn) {
             } else {
                 const arrowResult = computeBlochArrow(lastParsedResult, selectedQubitIndex);
                 const arrowVerts = arrowResult.vertices;
-                if (arrowVerts.byteLength <= webgpuState.arrowVertexBuffer.size) {
+                if (arrowVerts.byteLength > 0 && arrowVerts.byteLength <= webgpuState.arrowVertexBuffer.size) {
                     webgpuState.device.queue.writeBuffer(webgpuState.arrowVertexBuffer, 0, arrowVerts);
-                    webgpuState.arrowVertexCount = arrowVerts.length / 6;
                 }
+                webgpuState.arrowVertexCount = arrowVerts.length / 6;
                 const lineVerts = buildSphereLines();
                 webgpuState.device.queue.writeBuffer(webgpuState.lineVertexBuffer, 0, lineVerts);
                 webgpuState.lineVertexCount = lineVerts.length / 6;
@@ -664,12 +670,17 @@ if (modeBtn) {
     });
 }
 
+let currentTargetOp = null;
+
 window.addEventListener('message', async event => {
     const message = event.data;
     if (message.command === 'init' || message.command === 'update') {
         if (message.data && message.data.code) {
             pendingCode = message.data.code;
-            const result = await parseQSharp(pendingCode);
+            if (message.data.targetOp !== undefined) {
+                currentTargetOp = message.data.targetOp;
+            }
+            const result = await parseQSharp(pendingCode, currentTargetOp);
             console.log('Q# Parse Result:', result);
             lastParsedResult = result;
 

@@ -97,6 +97,7 @@ canvas {
 }
 
 #status {
+    display: none;
     min-height: 1.2em;
     margin: 12px 0 0;
     font-family: sans-serif;

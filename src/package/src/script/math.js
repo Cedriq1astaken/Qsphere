@@ -1,3 +1,7 @@
+// ═══════════════════════════════════════════════════════════════
+//  Complex Number
+// ═══════════════════════════════════════════════════════════════
+
 class Complex {
     constructor(re, im) {
         this.re = re || 0;
@@ -31,150 +35,9 @@ class Complex {
     }
 }
 
-function sphere(u, v) {
-    const vertices = [];
-
-    for (let i = 0; i < u; i++) {
-        const theta0 = (i / u) * Math.PI;
-        const theta1 = ((i + 1) / u) * Math.PI;
-
-        for (let j = 0; j < v; j++) {
-            const phi0 = (j / v) * 2 * Math.PI;
-            const phi1 = ((j + 1) / v) * 2 * Math.PI;
-
-            const p00 = getSpherePoint(theta0, phi0);
-            const p01 = getSpherePoint(theta0, phi1);
-            const p10 = getSpherePoint(theta1, phi0);
-            const p11 = getSpherePoint(theta1, phi1);
-            vertices.push(...p00, ...p10, ...p01);
-            vertices.push(...p00, ...p10, ...p01);
-            vertices.push(...p01, ...p10, ...p11);
-            vertices.push(...p01, ...p10, ...p11);
-        }
-    }
-
-    return {
-        positions: new Float32Array(vertices)
-    };
-}
-
-function getSpherePoint(theta, phi) {
-    return [
-        Math.sin(theta) * Math.cos(phi),
-        Math.sin(theta) * Math.sin(phi),
-        Math.cos(theta)
-    ];
-}
-
-function mult(A, B) {
-    const out = new Float32Array(16);
-    for (let col = 0; col < 4; col++) {
-        for (let row = 0; row < 4; row++) {
-            let sum = 0;
-            for (let k = 0; k < 4; k++) {
-                sum += A[k * 4 + row] * B[col * 4 + k];
-            }
-            out[col * 4 + row] = sum;
-        }
-    }
-    return out;
-}
-
-function createOrthographicMatrix(left, right, bottom, top, near, far) {
-    const lr = 1.0 / (left - right);
-    const bt = 1.0 / (bottom - top);
-    const nf = 1.0 / (near - far);
-
-    const out = new Float32Array(16);
-
-    out[0] = -2.0 * lr;
-    out[5] = -2.0 * bt;
-    out[10] = nf;
-    out[12] = (left + right) * lr;
-    out[13] = (top + bottom) * bt;
-    out[14] = near * nf;
-    out[15] = 1.0;
-
-    return out;
-}
-
-function createPerspectiveMatrix(fovY, aspect, near, far) {
-    const f = 1.0 / Math.tan(fovY / 2);
-    const nf = 1.0 / (near - far);
-
-    const out = new Float32Array(16);
-
-    out[0] = f / aspect;
-    out[5] = f;
-    out[10] = far * nf;
-    out[11] = -1.0;
-    out[14] = far * near * nf;
-
-    return out;
-}
-
-function createTranslationMatrix(x, y, z) {
-    const out = new Float32Array(16);
-
-    out[0] = 1.0;
-    out[5] = 1.0;
-    out[10] = 1.0;
-    out[12] = x;
-    out[13] = y;
-    out[14] = z;
-    out[15] = 1.0;
-
-    return out;
-}
-
-function rotateX(matrix, angle) {
-    const out = new Float32Array(16);
-    const c = Math.cos(angle);
-    const s = Math.sin(angle);
-
-    out[0] = 1.0;
-    out[5] = c;
-    out[6] = s;
-    out[9] = -s;
-    out[10] = c;
-    out[15] = 1.0;
-
-    return mult(matrix, out);
-}
-
-function rotateY(matrix, angle) {
-    const out = new Float32Array(16);
-    const c = Math.cos(angle);
-    const s = Math.sin(angle);
-
-    out[0] = c;
-    out[2] = -s;
-    out[5] = 1.0;
-    out[8] = s;
-    out[10] = c;
-    out[15] = 1.0;
-
-    return mult(matrix, out);
-}
-
-function rotateZ(matrix, angle) {
-    const out = new Float32Array(16);
-    const c = Math.cos(angle);
-    const s = Math.sin(angle);
-
-    out[0] = c;
-    out[1] = s;
-    out[4] = -s;
-    out[5] = c;
-    out[10] = 1.0;
-    out[15] = 1.0;
-
-    return mult(matrix, out);
-}
-
-function rotateMatrix(rotX, rotY, rotZ, matrix) {
-    return rotateZ(rotateY(rotateX(matrix, rotX), rotY), rotZ);
-}
+// ═══════════════════════════════════════════════════════════════
+//  Vec3 — 3-component vector helpers (arrays [x, y, z])
+// ═══════════════════════════════════════════════════════════════
 
 function vec3Len(v) {
     return Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
@@ -210,44 +73,219 @@ function rodriguesRotate(p, k, angle) {
     ];
 }
 
+/** Spherical linear interpolation between two vectors, preserving and interpolating magnitude r. */
 function interpolateVector(current, target, factor) {
-    let dot = vec3Dot(current, target);
+    const lenCurrent = vec3Len(current);
+    const lenTarget = vec3Len(target);
+    const r = lenCurrent + (lenTarget - lenCurrent) * factor;
+
+    if (r < 0.001) return [0, 0, 0];
+
+    const uCurrent = vec3Normalize(current);
+    const uTarget = vec3Normalize(target);
+
+    let dot = vec3Dot(uCurrent, uTarget);
     dot = Math.max(-1, Math.min(1, dot));
 
     if (dot > 0.9999) {
-        return [target[0], target[1], target[2]];
+        return [uTarget[0] * r, uTarget[1] * r, uTarget[2] * r];
     }
 
     if (dot < -0.9999) {
-        const perp = Math.abs(current[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
-        const axis = vec3Normalize(vec3Cross(current, perp));
-        return rodriguesRotate(current, axis, Math.PI * factor);
+        const perp = Math.abs(uCurrent[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+        const axis = vec3Normalize(vec3Cross(uCurrent, perp));
+        const rot = rodriguesRotate(uCurrent, axis, Math.PI * factor);
+        return [rot[0] * r, rot[1] * r, rot[2] * r];
     }
 
     const omega = Math.acos(dot);
     const sinOmega = Math.sin(omega);
-
     const stepAngle = factor * omega;
     const t = Math.min(1, stepAngle / omega);
-
     const s0 = Math.sin((1 - t) * omega) / sinOmega;
     const s1 = Math.sin(t * omega) / sinOmega;
 
-    const rx = s0 * current[0] + s1 * target[0];
-    const ry = s0 * current[1] + s1 * target[1];
-    const rz = s0 * current[2] + s1 * target[2];
+    const dir = vec3Normalize([
+        s0 * uCurrent[0] + s1 * uTarget[0],
+        s0 * uCurrent[1] + s1 * uTarget[1],
+        s0 * uCurrent[2] + s1 * uTarget[2]
+    ]);
 
-    return vec3Normalize([rx, ry, rz]);
+    return [dir[0] * r, dir[1] * r, dir[2] * r];
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  Mat4 — column-major 4×4 matrix operations (Float32Array[16])
+//
+//  Convention: matrices are stored in column-major order as a
+//  flat Float32Array[16].  Element at row r, column c lives at
+//  index [c * 4 + r].
+// ═══════════════════════════════════════════════════════════════
+
+/** Multiply two column-major 4×4 matrices: result = A × B. */
+function mult(A, B) {
+    const out = new Float32Array(16);
+    for (let col = 0; col < 4; col++) {
+        for (let row = 0; row < 4; row++) {
+            let sum = 0;
+            for (let k = 0; k < 4; k++) {
+                sum += A[k * 4 + row] * B[col * 4 + k];
+            }
+            out[col * 4 + row] = sum;
+        }
+    }
+    return out;
+}
+
+/** Multiply an arbitrary number of 4×4 matrices left-to-right: A × B × C × … */
+function mat4Chain(...matrices) {
+    return matrices.reduce(mult);
+}
+
+// ── Matrix constructors ──────────────────────────────────────
+
+function createPerspectiveMatrix(fovY, aspect, near, far) {
+    const f = 1.0 / Math.tan(fovY / 2);
+    const nf = 1.0 / (near - far);
+    const out = new Float32Array(16);
+    out[0] = f / aspect;
+    out[5] = f;
+    out[10] = far * nf;
+    out[11] = -1.0;
+    out[14] = far * near * nf;
+    return out;
+}
+
+function createTranslationMatrix(x, y, z) {
+    const out = new Float32Array(16);
+    out[0] = 1.0;
+    out[5] = 1.0;
+    out[10] = 1.0;
+    out[12] = x;
+    out[13] = y;
+    out[14] = z;
+    out[15] = 1.0;
+    return out;
+}
+
+// ── Standalone rotation matrix constructors ──────────────────
+// Each returns a pure rotation matrix.  Use mult() or mat4Chain()
+// to compose them with other transforms.
+
+function mat4RotationX(angle) {
+    const out = new Float32Array(16);
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    out[0] = 1.0;
+    out[5] = c;
+    out[6] = s;
+    out[9] = -s;
+    out[10] = c;
+    out[15] = 1.0;
+    return out;
+}
+
+function mat4RotationY(angle) {
+    const out = new Float32Array(16);
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    out[0] = c;
+    out[2] = -s;
+    out[5] = 1.0;
+    out[8] = s;
+    out[10] = c;
+    out[15] = 1.0;
+    return out;
+}
+
+function mat4RotationZ(angle) {
+    const out = new Float32Array(16);
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    out[0] = c;
+    out[1] = s;
+    out[4] = -s;
+    out[5] = c;
+    out[10] = 1.0;
+    out[15] = 1.0;
+    return out;
+}
+
+// ── Composed rotation helpers ────────────────────────────────
+
+/** Post-multiply a rotation onto `matrix`: returns matrix × R(angle). */
+function rotateX(matrix, angle) { return mult(matrix, mat4RotationX(angle)); }
+function rotateY(matrix, angle) { return mult(matrix, mat4RotationY(angle)); }
+function rotateZ(matrix, angle) { return mult(matrix, mat4RotationZ(angle)); }
+
+/**
+ * Build a model-view-projection matrix: base × Rx × Ry × Rz.
+ * Applies Euler rotations in XYZ order onto a base matrix
+ * (typically projection × view).
+ */
+function rotateMatrix(rotX, rotY, rotZ, base) {
+    return mat4Chain(base, mat4RotationX(rotX), mat4RotationY(rotY), mat4RotationZ(rotZ));
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Geometry Builders
+// ═══════════════════════════════════════════════════════════════
+
+function getSpherePoint(theta, phi) {
+    return [
+        Math.sin(theta) * Math.cos(phi),
+        Math.sin(theta) * Math.sin(phi),
+        Math.cos(theta)
+    ];
+}
+
+/**
+ * Generate a UV-sphere triangle mesh.
+ * Returns { positions: Float32Array } with stride-6 vertices
+ * (3 position + 3 normal per vertex).
+ */
+function sphere(u, v) {
+    const vertices = [];
+
+    for (let i = 0; i < u; i++) {
+        const theta0 = (i / u) * Math.PI;
+        const theta1 = ((i + 1) / u) * Math.PI;
+
+        for (let j = 0; j < v; j++) {
+            const phi0 = (j / v) * 2 * Math.PI;
+            const phi1 = ((j + 1) / v) * 2 * Math.PI;
+
+            const p00 = getSpherePoint(theta0, phi0);
+            const p01 = getSpherePoint(theta0, phi1);
+            const p10 = getSpherePoint(theta1, phi0);
+            const p11 = getSpherePoint(theta1, phi1);
+            // Two triangles per quad, each vertex doubled as (pos, normal)
+            vertices.push(...p00, ...p10, ...p01);
+            vertices.push(...p00, ...p10, ...p01);
+            vertices.push(...p01, ...p10, ...p11);
+            vertices.push(...p01, ...p10, ...p11);
+        }
+    }
+
+    return {
+        positions: new Float32Array(vertices)
+    };
+}
+
+/**
+ * Build line-list geometry for the three axis lines and three
+ * great circles of a unit sphere.  Stride-6: (pos xyz, normal xyz).
+ */
 function buildSphereLines(segments) {
     if (segments === undefined) segments = 64;
     const verts = [];
 
+    // Axis lines (X, Y, Z)
     verts.push(-1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0);
     verts.push(0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0);
     verts.push(0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 0, 0);
 
+    // Great circles (XZ, XY, YZ planes)
     for (let i = 0; i < segments; i++) {
         const a0 = (i / segments) * 2 * Math.PI;
         const a1 = ((i + 1) / segments) * 2 * Math.PI;
@@ -263,6 +301,10 @@ function buildSphereLines(segments) {
     return new Float32Array(verts);
 }
 
+/**
+ * Project a 3D point through a 4×4 MVP matrix to 2D screen coordinates.
+ * Returns [screenX, screenY] or null if behind the camera (clipW ≤ 0).
+ */
 function projectPoint(p, matrix, width, height) {
     const x = p[0], y = p[1], z = p[2];
     const clipX = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12];

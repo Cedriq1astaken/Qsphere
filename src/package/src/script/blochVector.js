@@ -39,9 +39,7 @@ function alignmentRotation(targetVec) {
 
 function buildArrowVertices(blochVec, options) {
     const r = Math.sqrt(blochVec[0] ** 2 + blochVec[1] ** 2 + blochVec[2] ** 2);
-    // WebGPU does not allow a zero-sized vertex buffer. Keep this degenerate
-    // vertex invisible while allowing the sphere pipeline to initialize.
-    if (r < 0.001) return new Float32Array([0, 0, 0, 0, 0, 1]);
+    if (r < 0.001) return new Float32Array(0);
 
     const opts = options || {};
     const baseShaftRadius = opts.shaftRadius ?? 0.02;

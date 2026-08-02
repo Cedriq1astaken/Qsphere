@@ -5,7 +5,13 @@ import * as path from 'path';
 export function activate(context: vscode.ExtensionContext) {
     console.log('Qsphere extension active for .qs files!');
 
-    const openVisualizerDisposable = vscode.commands.registerCommand('qsphere.openVisualizer', () => {
+    let activeTargetOp: { name: string, startLine: number, endLine: number } | undefined;
+
+    const openVisualizerDisposable = vscode.commands.registerCommand('qsphere.openVisualizer', (targetOp?: { name: string, startLine: number, endLine: number }) => {
+        if (targetOp) {
+            activeTargetOp = targetOp;
+        }
+
         const activeEditor = vscode.window.activeTextEditor;
         const sourceDocument = activeEditor?.document;
         const fileName = sourceDocument?.fileName || 'test.qs';
@@ -16,9 +22,11 @@ export function activate(context: vscode.ExtensionContext) {
             if (fs.existsSync(testQsPath)) codeContent = fs.readFileSync(testQsPath, 'utf8');
         }
 
+        const titleName = activeTargetOp?.name ? `Qsphere: ${activeTargetOp.name}` : 'Qsphere Quantum Visualizer';
+
         const panel = vscode.window.createWebviewPanel(
             'qsphereVisualizer',
-            'Qsphere Quantum Visualizer',
+            titleName,
             vscode.ViewColumn.Beside,
             {
                 enableScripts: true,
@@ -29,7 +37,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         panel.webview.html = getWebviewContent(context, panel.webview);
         const postSource = (command: 'init' | 'update', code: string, sourceName: string) => {
-            panel.webview.postMessage({ command, data: { fileName: sourceName, code } });
+            panel.webview.postMessage({ command, data: { fileName: sourceName, code, targetOp: activeTargetOp } });
         };
 
         const readyDisposable = panel.webview.onDidReceiveMessage(message => {
@@ -68,13 +76,39 @@ export function activate(context: vscode.ExtensionContext) {
             provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
                 if (!document.fileName.endsWith('.qs') && document.languageId !== 'qsharp') return [];
                 const lenses: vscode.CodeLens[] = [];
-                const operationPattern = /^\s*operation\s+[A-Za-z_][A-Za-z0-9_]*/;
+                const operationPattern = /^\s*operation\s+([A-Za-z_][A-Za-z0-9_]*)/;
                 for (let line = 0; line < document.lineCount; line++) {
-                    if (!operationPattern.test(document.lineAt(line).text)) continue;
+                    const match = document.lineAt(line).text.match(operationPattern);
+                    if (!match) continue;
+                    const opName = match[1];
+
+                    // Determine operation brace range
+                    let braceCount = 0;
+                    let foundOpenBrace = false;
+                    let endLine = line;
+                    for (let l = line; l < document.lineCount; l++) {
+                        const lineText = document.lineAt(l).text;
+                        for (const char of lineText) {
+                            if (char === '{') {
+                                braceCount++;
+                                foundOpenBrace = true;
+                            } else if (char === '}') {
+                                braceCount--;
+                                if (foundOpenBrace && braceCount === 0) {
+                                    endLine = l;
+                                    break;
+                                }
+                            }
+                        }
+                        if (foundOpenBrace && braceCount === 0) break;
+                        endLine = l;
+                    }
+
                     lenses.push(new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
-                        title: 'State',
+                        title: `State (${opName})`,
                         command: 'qsphere.openVisualizer',
-                        tooltip: 'Click to open Qsphere visualizer panel for this operation'
+                        arguments: [{ name: opName, startLine: line, endLine }],
+                        tooltip: `Click to open Qsphere visualizer scoped to operation ${opName}`
                     }));
                 }
                 return lenses;
