@@ -2010,13 +2010,13 @@ ${val.stack}`;
       const breakpointIds = breakpoints.map((breakpoint) => breakpoint.id);
       const events = { dispatchEvent: () => true };
       let skipNextSnapshot = false;
-      let targetOpWasActive = false;
       for (let stepNumber = 0; stepNumber < 1e4; stepNumber++) {
         const step = await debugService.evalNext(breakpointIds, events);
         const range = breakpoints.find((breakpoint) => breakpoint.id === step.value)?.range || null;
-        const isTargetOpBreakpoint = Boolean(targetOp && range && range.start.line >= targetOp.startLine && range.start.line <= targetOp.endLine);
-        const isPostTargetOpSnapshot = Boolean(targetOp && targetOpWasActive && (!range || !isTargetOpBreakpoint));
-        const isInsideTargetOp = !targetOp || isTargetOpBreakpoint || isPostTargetOpSnapshot;
+        const stackFrames = targetOp ? await debugService.getStackFrames() : [];
+        const isInsideTargetOp = !targetOp || stackFrames.some(
+          (frame) => frame.name.trim() === targetOp.name
+        );
         const isResetLine = range && resetLines.has(range.start.line);
         const snapshot = snapshotFromEntries(await debugService.captureQuantumState());
         if (snapshot && isInsideTargetOp && !skipNextSnapshot) {
@@ -2027,8 +2027,6 @@ ${val.stack}`;
             result.states.push(snapshot);
           }
         }
-        if (isTargetOpBreakpoint) targetOpWasActive = true;
-        if (isPostTargetOpSnapshot) targetOpWasActive = false;
         skipNextSnapshot = Boolean(isResetLine);
         result.steps.push({
           resultId: step.id,
@@ -2060,9 +2058,6 @@ ${val.stack}`;
       }
       while (result.states.length > 1 && isTrivialState(result.states[0])) {
         result.states.shift();
-      }
-      while (result.states.length > 1 && isTrivialState(result.states[result.states.length - 1])) {
-        result.states.pop();
       }
       result.qubitsList = Array.from({ length: result.qubitsDeclared }, (_, index) => `q${index}`);
       return result;

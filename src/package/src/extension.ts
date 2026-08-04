@@ -6,6 +6,7 @@ export function activate(context: vscode.ExtensionContext) {
     console.log('Qsphere extension active for .qs files!');
 
     let activeTargetOp: { name: string, startLine: number, endLine: number } | undefined;
+    let activePanel: vscode.WebviewPanel | undefined;
 
     const openVisualizerDisposable = vscode.commands.registerCommand('qsphere.openVisualizer', (targetOp?: { name: string, startLine: number, endLine: number }) => {
         if (targetOp) {
@@ -34,6 +35,7 @@ export function activate(context: vscode.ExtensionContext) {
                 localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'src'))]
             }
         );
+        activePanel = panel;
 
         panel.webview.html = getWebviewContent(context, panel.webview);
         const postSource = (command: 'init' | 'update', code: string, sourceName: string) => {
@@ -65,9 +67,14 @@ export function activate(context: vscode.ExtensionContext) {
 
         panel.onDidDispose(() => {
             if (updateTimer) clearTimeout(updateTimer);
+            if (activePanel === panel) activePanel = undefined;
             readyDisposable.dispose();
             changeDisposable.dispose();
         });
+    });
+
+    const replayAnimationDisposable = vscode.commands.registerCommand('qsphere.replayAnimation', () => {
+        activePanel?.webview.postMessage({ command: 'replayAnimation' });
     });
 
     const codeLensProvider = vscode.languages.registerCodeLensProvider(
@@ -77,6 +84,10 @@ export function activate(context: vscode.ExtensionContext) {
                 if (!document.fileName.endsWith('.qs') && document.languageId !== 'qsharp') return [];
                 const lenses: vscode.CodeLens[] = [];
                 const operationPattern = /^\s*operation\s+([A-Za-z_][A-Za-z0-9_]*)/;
+                const operationRanges = new Map<string, { startLine: number, endLine: number }>();
+
+                // First collect user-defined operation ranges. These are used to
+                // recognize calls without adding lenses to the declarations.
                 for (let line = 0; line < document.lineCount; line++) {
                     const match = document.lineAt(line).text.match(operationPattern);
                     if (!match) continue;
@@ -104,18 +115,46 @@ export function activate(context: vscode.ExtensionContext) {
                         endLine = l;
                     }
 
+                    operationRanges.set(opName, { startLine: line, endLine });
+
+                    if (opName === 'Main') {
+                        lenses.push(new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
+                            title: 'State (Main)',
+                            command: 'qsphere.openVisualizer',
+                            arguments: [{ name: opName, startLine: line, endLine }],
+                            tooltip: 'Click to open Qsphere visualizer for Main'
+                        }));
+                    }
+                }
+
+                // Add state lenses above calls to known user-defined operations.
+                // Built-in gates such as H, X, and Reset are not included because
+                // they do not appear in operationRanges.
+                const operationCallPattern = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+                for (let line = 0; line < document.lineCount; line++) {
+                    const lineText = document.lineAt(line).text;
+                    if (operationPattern.test(lineText)) continue;
+
+                    operationCallPattern.lastIndex = 0;
+                    const call = operationCallPattern.exec(lineText);
+                    if (!call) continue;
+
+                    const opName = call[1];
+                    const operation = operationRanges.get(opName);
+                    if (!operation) continue;
+
                     lenses.push(new vscode.CodeLens(new vscode.Range(line, 0, line, 0), {
                         title: `State (${opName})`,
                         command: 'qsphere.openVisualizer',
-                        arguments: [{ name: opName, startLine: line, endLine }],
-                        tooltip: `Click to open Qsphere visualizer scoped to operation ${opName}`
+                        arguments: [{ name: opName, ...operation }],
+                        tooltip: `Click to open Qsphere visualizer for this ${opName} call`
                     }));
                 }
                 return lenses;
             }
         }
     );
-    context.subscriptions.push(openVisualizerDisposable, codeLensProvider);
+    context.subscriptions.push(openVisualizerDisposable, replayAnimationDisposable, codeLensProvider);
 }
 
 export function deactivate() {}

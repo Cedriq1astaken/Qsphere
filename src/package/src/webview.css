@@ -124,6 +124,23 @@ canvas {
     white-space: nowrap;
 }
 
+.qubit-hover-info {
+    position: absolute;
+    z-index: 5;
+    padding: 6px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 4px;
+    background: rgba(8, 24, 31, 0.94);
+    color: #f0f0f0;
+    font: 12px/1.35 system-ui, -apple-system, sans-serif;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.qubit-hover-info[hidden] {
+    display: none;
+}
+
 #status {
     display: none;
     min-height: 1.2em;

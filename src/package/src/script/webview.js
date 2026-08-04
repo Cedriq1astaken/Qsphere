@@ -259,7 +259,7 @@ function destroyMiniRenderers() {
     miniRenderers = [];
 }
 
-async function createMiniRenderer(canvasElement, result, qubitIndex, state, previousVector) {
+async function createMiniRenderer(canvasElement, result, qubitIndex, state, previousVector, previousRotation) {
     const context = canvasElement.getContext('webgpu');
     if (!context) return null;
 
@@ -300,7 +300,7 @@ async function createMiniRenderer(canvasElement, result, qubitIndex, state, prev
         state.device.queue.writeBuffer(arrowVertexBuffer, 0, arrowVertices);
     }
 
-    const rotation = [0.3, 0.0, 0.0];
+    const rotation = previousRotation ? [...previousRotation] : [0.3, 0.0, 0.0];
     let dragging = false;
     let previousX = 0;
     canvasElement.addEventListener('mousedown', event => {
@@ -315,7 +315,7 @@ async function createMiniRenderer(canvasElement, result, qubitIndex, state, prev
     canvasElement.addEventListener('mouseup', () => { dragging = false; });
     canvasElement.addEventListener('mouseleave', () => { dragging = false; });
 
-    return {
+    const renderer = {
         canvas: canvasElement,
         stage: canvasElement.parentElement,
         labels: [...canvasElement.parentElement.querySelectorAll('.qubit-bloch-label')],
@@ -331,8 +331,28 @@ async function createMiniRenderer(canvasElement, result, qubitIndex, state, prev
         stepQueue,
         projMatrix,
         rotation,
-        qubitIndex
+        qubitIndex,
+        hoverInfo: null
     };
+
+    try {
+        const hoverInfo = document.createElement('div');
+        hoverInfo.className = 'qubit-hover-info';
+        hoverInfo.hidden = true;
+        renderer.stage.appendChild(hoverInfo);
+        renderer.hoverInfo = hoverInfo;
+
+        canvasElement.addEventListener('mousemove', event => {
+            updateArrowHover(renderer, event);
+        });
+        canvasElement.addEventListener('mouseleave', () => {
+            renderer.hoverInfo.hidden = true;
+        });
+    } catch (error) {
+        console.warn('Arrow hover information unavailable:', error);
+    }
+
+    return renderer;
 }
 
 function renderMiniRenderer(renderer, state) {
@@ -402,13 +422,101 @@ function updateMiniLabels(renderer, modelMatrix) {
 async function renderMiniQubitColumn(result) {
     if (!webgpuState) return;
     const previousVectors = miniRenderers.map(renderer => renderer.currentVector);
+    const previousRotations = miniRenderers.map(renderer => renderer.rotation);
     destroyMiniRenderers();
     const canvases = [...document.querySelectorAll('.qubit-mini-canvas')];
     miniRenderers = (await Promise.all(
         canvases.map((canvasElement, index) =>
-            createMiniRenderer(canvasElement, result, index, webgpuState, previousVectors[index])
+            createMiniRenderer(
+                canvasElement,
+                result,
+                index,
+                webgpuState,
+                previousVectors[index],
+                previousRotations[index]
+            )
         )
     )).filter(Boolean);
+}
+
+function distanceToSegment(point, start, end) {
+    const dx = end[0] - start[0];
+    const dy = end[1] - start[1];
+    const lengthSquared = dx * dx + dy * dy;
+    if (lengthSquared < 1e-6) {
+        return Math.hypot(point[0] - start[0], point[1] - start[1]);
+    }
+    const t = Math.max(0, Math.min(1,
+        ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / lengthSquared));
+    return Math.hypot(
+        point[0] - (start[0] + t * dx),
+        point[1] - (start[1] + t * dy)
+    );
+}
+
+function updateArrowHover(renderer, event) {
+    if (!renderer.hoverInfo) return;
+
+    const width = renderer.stage.clientWidth;
+    const height = renderer.stage.clientHeight;
+    const rect = renderer.canvas.getBoundingClientRect();
+    const point = [event.clientX - rect.left, event.clientY - rect.top];
+    const modelMatrix = rotateMatrix(...renderer.rotation, renderer.projMatrix);
+    const start = projectPoint([0, 0, 0], modelMatrix, width, height);
+    const end = projectPoint(renderer.currentVector, modelMatrix, width, height);
+
+    if (!start || !end || distanceToSegment(point, start, end) > 11) {
+        renderer.hoverInfo.hidden = true;
+        return;
+    }
+
+    const blochX = renderer.currentVector[0];
+    const blochY = renderer.currentVector[2];
+    const blochZ = renderer.currentVector[1];
+    const probabilityZero = Math.max(0, Math.min(1, (1 + blochZ) / 2));
+    const probabilityOne = Math.max(0, Math.min(1, (1 - blochZ) / 2));
+    const phase = Math.atan2(blochY, blochX) * 180 / Math.PI;
+    const phaseText = Math.hypot(blochX, blochY) < 1e-3
+        ? 'undefined'
+        : `${phase.toFixed(1)}°`;
+
+    renderer.hoverInfo.innerHTML =
+        `P(|0⟩): ${(probabilityZero * 100).toFixed(1)}%<br>` +
+        `P(|1⟩): ${(probabilityOne * 100).toFixed(1)}%<br>` +
+        `Phase: ${phaseText}`;
+    renderer.hoverInfo.style.left = `${Math.min(width - 8, Math.max(8, point[0] + 12))}px`;
+    renderer.hoverInfo.style.top = `${Math.min(height - 8, Math.max(8, point[1] + 12))}px`;
+    renderer.hoverInfo.hidden = false;
+}
+
+function replayAnimation() {
+    if (!lastParsedResult) return;
+
+    for (let index = 0; index < miniRenderers.length; index++) {
+        const renderer = miniRenderers[index];
+        const arrowResult = computeBlochArrow(lastParsedResult, index);
+        const firstVector = arrowResult.stepVectors[0] || arrowResult.screenVector || [0, 1, 0];
+        renderer.currentVector = [...firstVector];
+        renderer.targetVector = [...firstVector];
+        renderer.stepQueue = (arrowResult.stepVectors || []).slice(1);
+        const vertices = buildArrowVertices(firstVector);
+        renderer.arrowVertexCount = vertices.length / 6;
+        if (vertices.byteLength > 0) {
+            renderer.device.queue.writeBuffer(renderer.arrowVertexBuffer, 0, vertices);
+        }
+    }
+
+    if (webgpuState) {
+        const firstVector = webgpuState.stepVectors?.[0] || webgpuState.targetVector || [0, 1, 0];
+        webgpuState.currentVector = [...firstVector];
+        webgpuState.targetVector = [...firstVector];
+        webgpuState.stepQueue = (webgpuState.stepVectors || []).slice(1);
+        const vertices = buildArrowVertices(firstVector);
+        webgpuState.arrowVertexCount = vertices.length / 6;
+        if (vertices.byteLength > 0) {
+            webgpuState.device.queue.writeBuffer(webgpuState.arrowVertexBuffer, 0, vertices);
+        }
+    }
 }
 
 async function initWebGPU() {
@@ -950,6 +1058,10 @@ let sourceUpdateGeneration = 0;
 
 window.addEventListener('message', async event => {
     const message = event.data;
+    if (message.command === 'replayAnimation') {
+        replayAnimation();
+        return;
+    }
     if (message.command === 'init' || message.command === 'update') {
         if (message.data && message.data.code) {
             const updateGeneration = ++sourceUpdateGeneration;

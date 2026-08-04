@@ -84,16 +84,14 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
         const events = { dispatchEvent: () => true };
 
         let skipNextSnapshot = false;
-        let targetOpWasActive = false;
 
         for (let stepNumber = 0; stepNumber < 10000; stepNumber++) {
             const step = await debugService.evalNext(breakpointIds, events);
             const range = breakpoints.find(breakpoint => breakpoint.id === step.value)?.range || null;
-            const isTargetOpBreakpoint = Boolean(targetOp && range &&
-                range.start.line >= targetOp.startLine && range.start.line <= targetOp.endLine);
-            const isPostTargetOpSnapshot = Boolean(targetOp && targetOpWasActive &&
-                (!range || !isTargetOpBreakpoint));
-            const isInsideTargetOp = !targetOp || isTargetOpBreakpoint || isPostTargetOpSnapshot;
+            const stackFrames = targetOp ? await debugService.getStackFrames() : [];
+            const isInsideTargetOp = !targetOp || stackFrames.some(
+                frame => frame.name.trim() === targetOp.name
+            );
 
             const isResetLine = range && resetLines.has(range.start.line);
 
@@ -107,9 +105,6 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
                     result.states.push(snapshot);
                 }
             }
-
-            if (isTargetOpBreakpoint) targetOpWasActive = true;
-            if (isPostTargetOpSnapshot) targetOpWasActive = false;
 
             // Flag to skip the post-Reset state snapshot so Reset operations are invisible
             skipNextSnapshot = Boolean(isResetLine);
@@ -154,11 +149,6 @@ async function executeQSharp(source, fileName, wasmUri, targetOp) {
         // Drop initial un-operated ground state |0…0⟩ before gates execute
         while (result.states.length > 1 && isTrivialState(result.states[0])) {
             result.states.shift();
-        }
-
-        // Drop trailing trivial |0…0⟩ states caused by deallocation
-        while (result.states.length > 1 && isTrivialState(result.states[result.states.length - 1])) {
-            result.states.pop();
         }
 
         result.qubitsList = Array.from({ length: result.qubitsDeclared }, (_, index) => `q${index}`);

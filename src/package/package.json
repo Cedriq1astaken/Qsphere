@@ -21,6 +21,11 @@
         "title": "Qsphere: Open Quantum Visualizer",
         "category": "Qsphere",
         "icon": "$(graph)"
+      },
+      {
+        "command": "qsphere.replayAnimation",
+        "title": "Qsphere: Replay Animation",
+        "category": "Qsphere"
       }
     ],
     "menus": {
