@@ -34,12 +34,12 @@ body {
 
 .view-tab {
     margin: 0;
-    padding: 7px 14px 8px;
+    padding: 6px 12px 7px;
     border: 0;
     background: transparent;
     color: rgba(230, 230, 238, 0.68);
     cursor: pointer;
-    font: 600 13px system-ui, -apple-system, sans-serif;
+    font: 600 11px system-ui, -apple-system, sans-serif;
 }
 
 .view-tab + .view-tab {
