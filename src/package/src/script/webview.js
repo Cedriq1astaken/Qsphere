@@ -1,7 +1,12 @@
+// Main browser-side controller for the visualizer.
+// It coordinates Q# results, WebGPU buffers, canvas fallback drawing, tabs,
+// animation, pointer interaction, and the per-qubit Bloch cards.
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : undefined;
 
 const canvas = document.querySelector('canvas');
 const statusText = document.querySelector('#status');
+const qsphereContainer = document.getElementById('container');
+const controlsContainer = document.getElementById('controls');
 let rotationAngles = [0.3, 0.0, 0.0];
 let currentMode = 'bloch';
 let lastParsedResult = null;
@@ -10,13 +15,18 @@ let selectedQubitName = null;
 let currentQubitsList = [];
 let miniRenderers = [];
 const qubitSphereSize = 270;
+let qsphereHoverInfo = null;
 
+// Compare vectors with a small tolerance so animation can settle cleanly despite
+// floating-point interpolation noise.
 function vectorsClose(a, b, epsilon = 1e-3) {
     return Math.abs(a[0] - b[0]) < epsilon
         && Math.abs(a[1] - b[1]) < epsilon
         && Math.abs(a[2] - b[2]) < epsilon;
 }
 
+// Build the DOM wrapper used by each mini Bloch canvas. Labels live in the same
+// stage so their projected positions track the sphere during rotation.
 function createQubitSphereStage(card, canvasElement) {
     const stage = document.createElement('div');
     stage.className = 'qubit-sphere-stage';
@@ -44,6 +54,208 @@ function setStatus(message) {
     if (statusText) statusText.textContent = '';
 }
 
+// Paint the phase key with the same phaseToRgb mapping used by Q-sphere nodes.
+function drawPhaseLegend() {
+    const legendCanvas = document.getElementById('qsphere-phase-wheel');
+    if (!legendCanvas || typeof phaseToRgb !== 'function') return;
+
+    const context = legendCanvas.getContext('2d');
+    if (!context) return;
+
+    const center = legendCanvas.width / 2;
+    const outerRadius = center - 4;
+    const innerRadius = outerRadius - 10;
+    const segments = 24;
+
+    context.clearRect(0, 0, legendCanvas.width, legendCanvas.height);
+    for (let index = 0; index < segments; index++) {
+        const start = (index / segments) * Math.PI * 2;
+        const end = ((index + 1) / segments) * Math.PI * 2;
+        const phase = -((start + end) / 2);
+        const [r, g, b] = phaseToRgb(phase);
+        context.beginPath();
+        context.arc(center, center, outerRadius, start, end);
+        context.arc(center, center, innerRadius, end, start, true);
+        context.closePath();
+        context.fillStyle = `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+        context.fill();
+    }
+
+    context.beginPath();
+    context.arc(center, center, innerRadius - 1, 0, Math.PI * 2);
+    context.fillStyle = '#12303a';
+    context.fill();
+    context.strokeStyle = 'rgba(230, 230, 238, 0.35)';
+    context.lineWidth = 1;
+    context.stroke();
+}
+
+// Keep tab state in both the DOM and a body data attribute so CSS can enforce the
+// active view even while JavaScript is replacing/reinserting the main container.
+function updateModeTabs() {
+    document.body.dataset.visualizationMode = currentMode;
+    document.querySelectorAll('.view-tab').forEach(tab => {
+        const isActive = tab.dataset.viewMode === currentMode;
+        tab.classList.toggle('active', isActive);
+        tab.setAttribute('aria-selected', String(isActive));
+    });
+}
+
+function getQsphereHoverInfo() {
+    if (qsphereHoverInfo || !qsphereContainer) return qsphereHoverInfo;
+
+    qsphereHoverInfo = document.createElement('div');
+    qsphereHoverInfo.className = 'qubit-hover-info qsphere-hover-info';
+    qsphereHoverInfo.hidden = true;
+    qsphereContainer.appendChild(qsphereHoverInfo);
+    return qsphereHoverInfo;
+}
+
+function formatBasisState(index, qubits) {
+    return `|${index.toString(2).padStart(qubits, '0')}>`;
+}
+
+function formatPhasePi(phase) {
+    const twoPi = Math.PI * 2;
+    const normalized = ((phase % twoPi) + twoPi) % twoPi;
+    const units = normalized / Math.PI;
+    const known = [
+        [0, '0'],
+        [0.5, 'pi/2'],
+        [1, 'pi'],
+        [1.5, '3pi/2'],
+        [2, '0']
+    ];
+
+    for (const [value, label] of known) {
+        if (Math.abs(units - value) < 0.03) return label;
+    }
+    return `${units.toFixed(2)}pi`;
+}
+
+function updateQsphereBuffers(qs, rebuildLabels = true) {
+    if (!webgpuState || !qs) return;
+
+    const nodeVerts = qs.nodeVertices;
+    if (nodeVerts.byteLength <= webgpuState.qnodeVertexBuffer.size) {
+        webgpuState.device.queue.writeBuffer(webgpuState.qnodeVertexBuffer, 0, nodeVerts);
+        webgpuState.qnodeVertexCount = nodeVerts.length / 7;
+    }
+
+    const lineVerts = qs.lineVertices || qs.ringVertices;
+    if (lineVerts.byteLength <= webgpuState.qsphereLineVertexBuffer.size) {
+        webgpuState.device.queue.writeBuffer(webgpuState.qsphereLineVertexBuffer, 0, lineVerts);
+        webgpuState.qsphereLineVertexCount = lineVerts.length / 6;
+    }
+    const spokeVerts = qs.spokeVertices || new Float32Array(0);
+    if (spokeVerts.byteLength <= webgpuState.qsphereSpokeVertexBuffer.size) {
+        webgpuState.device.queue.writeBuffer(webgpuState.qsphereSpokeVertexBuffer, 0, spokeVerts);
+        webgpuState.qsphereSpokeVertexCount = spokeVerts.length / 7;
+    }
+    webgpuState.qsphereData = qs;
+    if (rebuildLabels) rebuildQsphereLabels(qs.points, qs.N);
+}
+
+// Copy the latest Q-sphere geometry into dedicated GPU buffers. Q-sphere rings
+// must stay separate from the Bloch line buffer used by mini renderers.
+function updateQsphereState(result, options = {}) {
+    if (!webgpuState || !result) return;
+
+    const qs = computeQsphere(result, {
+        focusedIndex: webgpuState.qsphereHoveredIndex
+    });
+    updateQsphereBuffers(qs, options.rebuildLabels !== false);
+}
+
+function setQsphereHoveredIndex(index) {
+    if (!webgpuState || webgpuState.qsphereHoveredIndex === index) return;
+
+    webgpuState.qsphereHoveredIndex = index;
+    if (lastParsedResult) updateQsphereState(lastParsedResult, { rebuildLabels: false });
+}
+
+function clearQsphereHover() {
+    setQsphereHoveredIndex(null);
+    if (qsphereHoverInfo) qsphereHoverInfo.hidden = true;
+}
+
+function updateQsphereHover(event) {
+    if (!webgpuState || currentMode !== 'qsphere' || isDragging) {
+        clearQsphereHover();
+        return;
+    }
+
+    const hoverInfo = getQsphereHoverInfo();
+    const qsphereData = webgpuState.qsphereData;
+    if (!hoverInfo || !qsphereData?.hoverTargets?.length) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const width = qsphereContainer.clientWidth;
+    const height = qsphereContainer.clientHeight;
+    const point = [event.clientX - rect.left, event.clientY - rect.top];
+    const modelMatrix = rotateMatrix(...rotationAngles, webgpuState.projMatrix);
+    const center = projectPoint([0, 0, 0], modelMatrix, width, height);
+
+    let best = null;
+    for (const target of qsphereData.hoverTargets) {
+        const projected = projectPoint(target.pos, modelMatrix, width, height);
+        if (!projected) continue;
+
+        const nodeDistance = Math.hypot(point[0] - projected[0], point[1] - projected[1]);
+        const nodeHitRadius = Math.max(9, 10 + target.radius * 125);
+        const centerDistance = center ? Math.hypot(point[0] - center[0], point[1] - center[1]) : 0;
+        const spokeDistance = center ? distanceToSegment(point, center, projected) : Number.POSITIVE_INFINITY;
+        const isNodeHit = nodeDistance <= nodeHitRadius;
+        const isSpokeHit = centerDistance > 14 && spokeDistance <= 9;
+        const hitDistance = isNodeHit ? nodeDistance : spokeDistance;
+        const hitThreshold = isNodeHit ? nodeHitRadius : 9;
+
+        if ((isNodeHit || isSpokeHit) && hitDistance <= hitThreshold && (!best || hitDistance < best.distance)) {
+            best = { target, projected, distance: hitDistance };
+        }
+    }
+
+    if (!best) {
+        clearQsphereHover();
+        return;
+    }
+
+    setQsphereHoveredIndex(best.target.index);
+
+    const phaseDegrees = (((best.target.phase * 180 / Math.PI) % 360) + 360) % 360;
+    hoverInfo.innerHTML =
+        `${formatBasisState(best.target.index, qsphereData.N)}<br>` +
+        `Probability: ${(best.target.probability * 100).toFixed(1)}%<br>` +
+        `Phase: ${phaseDegrees.toFixed(1)} deg (${formatPhasePi(best.target.phase)})`;
+    hoverInfo.style.left = `${Math.min(width - 8, Math.max(8, point[0] + 12))}px`;
+    hoverInfo.style.top = `${Math.min(height - 8, Math.max(8, point[1] + 12))}px`;
+    hoverInfo.hidden = false;
+}
+
+// Switch views, refresh visibility, and render the already parsed state immediately.
+function setVisualizationMode(mode) {
+    if (mode !== 'bloch' && mode !== 'qsphere') return;
+    clearQsphereHover();
+    currentMode = mode;
+    updateModeTabs();
+
+    updateVisibility(lastParsedResult?.qubitsDeclared || 0);
+    if (lastParsedResult && currentMode === 'qsphere') {
+        resizeCanvas();
+        if (webgpuState) webgpuState.projMatrix = webgpuState.buildProjMatrix();
+        updateQsphereState(lastParsedResult);
+    }
+
+    if (webgpuState) render(webgpuState);
+}
+
+document.querySelectorAll('.view-tab').forEach(tab => {
+    tab.addEventListener('click', () => setVisualizationMode(tab.dataset.viewMode));
+});
+updateModeTabs();
+drawPhaseLegend();
+
+// Fetch a WGSL shader as text so it can be compiled into a WebGPU shader module.
 async function loadShader(path) {
     const response = await fetch(path);
     if (!response.ok) {
@@ -53,6 +265,7 @@ async function loadShader(path) {
     return response.text();
 }
 
+// Match the backing canvas resolution to its CSS size and device pixel ratio.
 function resizeCanvas() {
     const pixelRatio = window.devicePixelRatio || 1;
     const width = Math.max(1, Math.floor(canvas.clientWidth * pixelRatio));
@@ -67,6 +280,8 @@ function resizeCanvas() {
 let pendingCode = null;
 let fallbackMode = false;
 
+// Position labels when WebGPU is unavailable. This simple 2D fallback keeps the
+// visualizer usable on systems without WebGPU support.
 function positionFallbackLabels() {
     const positions = {
         'label-zero': [0.5, 0.02],
@@ -85,6 +300,7 @@ function positionFallbackLabels() {
     }
 }
 
+// Draw a minimal full-size Bloch sphere and arrow with Canvas 2D.
 function drawFallbackBloch(screenVector) {
     resizeCanvas();
     const context = canvas.getContext('2d');
@@ -131,11 +347,13 @@ function drawFallbackBloch(screenVector) {
     positionFallbackLabels();
 }
 
+// Convert the latest Q# result into the fallback arrow representation.
 function drawFallbackResult(result, targetQubit = 0) {
     const arrowResult = computeBlochArrow(result, targetQubit);
     drawFallbackBloch(arrowResult.screenVector);
 }
 
+// Draw one compact Bloch sphere for the fallback version of a qubit card.
 function drawMiniBlochSphere(canvasElement, screenVector, label) {
     const context = canvasElement.getContext('2d');
     if (!context) return;
@@ -220,6 +438,8 @@ function drawMiniBlochSphere(canvasElement, screenVector, label) {
     context.fillText(label || '', centerX, height - 8);
 }
 
+// Create the visible Bloch card DOM for every declared qubit. WebGPU renderers
+// are attached afterward, while fallback mode paints each canvas immediately.
 function renderQubitColumn(result) {
     const column = document.getElementById('qubit-column');
     if (!column) return;
@@ -251,6 +471,7 @@ function renderQubitColumn(result) {
     }
 }
 
+// Release GPU resources belonging to old mini renderers before rebuilding cards.
 function destroyMiniRenderers() {
     for (const renderer of miniRenderers) {
         renderer.uniformBuffer?.destroy();
@@ -259,6 +480,7 @@ function destroyMiniRenderers() {
     miniRenderers = [];
 }
 
+// Create the WebGPU resources and pointer handlers for one qubit card.
 async function createMiniRenderer(canvasElement, result, qubitIndex, state, previousVector, previousRotation) {
     const context = canvasElement.getContext('webgpu');
     if (!context) return null;
@@ -355,6 +577,7 @@ async function createMiniRenderer(canvasElement, result, qubitIndex, state, prev
     return renderer;
 }
 
+// Advance one mini arrow toward its next captured state and submit its render pass.
 function renderMiniRenderer(renderer, state) {
     const current = renderer.currentVector;
     const target = renderer.targetVector;
@@ -403,6 +626,8 @@ function renderMiniRenderer(renderer, state) {
     renderer.device.queue.submit([commandEncoder.finish()]);
 }
 
+// Project the six Bloch basis labels into the mini canvas and hide labels behind
+// the camera when their projected point is unavailable.
 function updateMiniLabels(renderer, modelMatrix) {
     const width = renderer.stage.clientWidth;
     const height = renderer.stage.clientHeight;
@@ -419,6 +644,8 @@ function updateMiniLabels(renderer, modelMatrix) {
     }
 }
 
+// Upgrade all cards from fallback canvases to independent WebGPU renderers while
+// preserving each card's current vector and rotation where possible.
 async function renderMiniQubitColumn(result) {
     if (!webgpuState) return;
     const previousVectors = miniRenderers.map(renderer => renderer.currentVector);
@@ -439,6 +666,7 @@ async function renderMiniQubitColumn(result) {
     )).filter(Boolean);
 }
 
+// Return the shortest distance from a 2D point to a line segment.
 function distanceToSegment(point, start, end) {
     const dx = end[0] - start[0];
     const dy = end[1] - start[1];
@@ -454,6 +682,8 @@ function distanceToSegment(point, start, end) {
     );
 }
 
+// Display probability and phase information when the pointer is close to the
+// projected arrow segment, rather than anywhere inside the canvas.
 function updateArrowHover(renderer, event) {
     if (!renderer.hoverInfo) return;
 
@@ -489,6 +719,7 @@ function updateArrowHover(renderer, event) {
     renderer.hoverInfo.hidden = false;
 }
 
+// Reset every renderer to its first captured vector and queue the remaining frames.
 function replayAnimation() {
     if (!lastParsedResult) return;
 
@@ -519,6 +750,8 @@ function replayAnimation() {
     }
 }
 
+// Initialize WebGPU, compile all shaders, create pipelines, and allocate buffers
+// shared by the full-size Q-sphere and mini Bloch renderers.
 async function initWebGPU() {
     let initialArrowData = null;
     let initialQubits = 0;
@@ -635,13 +868,15 @@ async function initWebGPU() {
     const arrowShaderUri = canvas.dataset.arrowShader || 'shader/fragment_arrow.wgsl';
     const linesShaderUri = canvas.dataset.linesShader || 'shader/fragment_lines.wgsl';
     const qnodesShaderUri = canvas.dataset.qnodesShader || 'shader/fragment_qnodes.wgsl';
+    const qnodesVertexShaderUri = canvas.dataset.qnodesVertexShader || 'shader/qnodes_vertex.wgsl';
 
-    const [vertexShader, fragmentShader, arrowFragShader, linesFragShader, qnodesFragShader] = await Promise.all([
+    const [vertexShader, fragmentShader, arrowFragShader, linesFragShader, qnodesFragShader, qnodesVertexShader] = await Promise.all([
         loadShader(vertexShaderUri),
         loadShader(fragmentShaderUri),
         loadShader(arrowShaderUri),
         loadShader(linesShaderUri),
-        loadShader(qnodesShaderUri)
+        loadShader(qnodesShaderUri),
+        loadShader(qnodesVertexShaderUri)
     ]);
 
     const vertexModule = device.createShaderModule({ code: vertexShader });
@@ -649,6 +884,7 @@ async function initWebGPU() {
     const arrowFragModule = device.createShaderModule({ code: arrowFragShader });
     const linesFragModule = device.createShaderModule({ code: linesFragShader });
     const qnodesFragModule = device.createShaderModule({ code: qnodesFragShader });
+    const qnodesVertexModule = device.createShaderModule({ code: qnodesVertexShader });
 
 
     const vertexBufferLayout = {
@@ -663,6 +899,21 @@ async function initWebGPU() {
                 shaderLocation: 1,
                 offset: Float32Array.BYTES_PER_ELEMENT * 3,
                 format: 'float32x3'
+            }
+        ]
+    };
+    const qnodeVertexBufferLayout = {
+        arrayStride: Float32Array.BYTES_PER_ELEMENT * 7,
+        attributes: [
+            {
+                shaderLocation: 0,
+                offset: 0,
+                format: 'float32x3'
+            },
+            {
+                shaderLocation: 1,
+                offset: Float32Array.BYTES_PER_ELEMENT * 3,
+                format: 'float32x4'
             }
         ]
     };
@@ -735,9 +986,24 @@ async function initWebGPU() {
     const qnodePipeline = device.createRenderPipeline({
         layout: pipelineLayout,
         vertex: {
-            module: vertexModule,
+            module: qnodesVertexModule,
             entryPoint: 'main',
-            buffers: [vertexBufferLayout]
+            buffers: [qnodeVertexBufferLayout]
+        },
+        fragment: {
+            module: qnodesFragModule,
+            entryPoint: 'main',
+            targets: [{ format, blend: blendState }]
+        },
+        primitive: { topology: 'triangle-list' }
+    });
+
+    const spokePipeline = device.createRenderPipeline({
+        layout: pipelineLayout,
+        vertex: {
+            module: qnodesVertexModule,
+            entryPoint: 'main',
+            buffers: [qnodeVertexBufferLayout]
         },
         fragment: {
             module: qnodesFragModule,
@@ -775,6 +1041,19 @@ async function initWebGPU() {
     });
     let qnodeVertexCount = 0;
 
+    const qsphereLineVertexBuffer = device.createBuffer({
+        label: 'Q-sphere Line Vertex Buffer',
+        size: 4 * 1024 * 1024,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+    });
+    let qsphereLineVertexCount = 0;
+    const qsphereSpokeVertexBuffer = device.createBuffer({
+        label: 'Q-sphere Spoke Vertex Buffer',
+        size: 4 * 1024 * 1024,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+    });
+    let qsphereSpokeVertexCount = 0;
+
     resizeCanvas();
 
     context.configure({
@@ -794,10 +1073,15 @@ async function initWebGPU() {
         arrowPipeline, arrowVertexBuffer, arrowVertexCount,
         linePipeline, lineVertexBuffer, lineVertexCount,
         qnodePipeline, qnodeVertexBuffer, qnodeVertexCount,
+        spokePipeline, qsphereLineVertexBuffer, qsphereLineVertexCount,
+        qsphereSpokeVertexBuffer, qsphereSpokeVertexCount,
         currentVector, targetVector, stepVectors, stepQueue: []
     };
 }
 
+// Submit one full-size render pass. Which geometry is drawn depends on the active
+// view: Q-sphere draws the sphere/rings/spokes/nodes; Bloch keeps this surface clear
+// because the visible Bloch cards render through their own passes.
 function render(state) {
     if (!state) return;
 
@@ -813,26 +1097,25 @@ function render(state) {
         }]
     });
 
-    passEncoder.setPipeline(state.pipeline);
-    if (state.bindGroup) passEncoder.setBindGroup(0, state.bindGroup);
-    passEncoder.setVertexBuffer(0, state.vertexBuffer);
-    passEncoder.draw(state.vertexCount);
+    if (currentMode === 'qsphere') {
+        passEncoder.setPipeline(state.pipeline);
+        if (state.bindGroup) passEncoder.setBindGroup(0, state.bindGroup);
+        passEncoder.setVertexBuffer(0, state.vertexBuffer);
+        passEncoder.draw(state.vertexCount);
 
-    if (state.linePipeline && state.lineVertexBuffer && state.lineVertexCount > 0) {
-        passEncoder.setPipeline(state.linePipeline);
-        passEncoder.setBindGroup(0, state.bindGroup);
-        passEncoder.setVertexBuffer(0, state.lineVertexBuffer);
-        passEncoder.draw(state.lineVertexCount);
-    }
-
-    if (currentMode === 'bloch') {
-        if (state.arrowPipeline && state.arrowVertexBuffer && state.arrowVertexCount > 0) {
-            passEncoder.setPipeline(state.arrowPipeline);
+        if (state.linePipeline && state.qsphereLineVertexBuffer && state.qsphereLineVertexCount > 0) {
+            passEncoder.setPipeline(state.linePipeline);
             passEncoder.setBindGroup(0, state.bindGroup);
-            passEncoder.setVertexBuffer(0, state.arrowVertexBuffer);
-            passEncoder.draw(state.arrowVertexCount);
+            passEncoder.setVertexBuffer(0, state.qsphereLineVertexBuffer);
+            passEncoder.draw(state.qsphereLineVertexCount);
         }
-    } else {
+
+        if (state.spokePipeline && state.qsphereSpokeVertexBuffer && state.qsphereSpokeVertexCount > 0) {
+            passEncoder.setPipeline(state.spokePipeline);
+            passEncoder.setBindGroup(0, state.bindGroup);
+            passEncoder.setVertexBuffer(0, state.qsphereSpokeVertexBuffer);
+            passEncoder.draw(state.qsphereSpokeVertexCount);
+        }
         if (state.qnodePipeline && state.qnodeVertexBuffer && state.qnodeVertexCount > 0) {
             passEncoder.setPipeline(state.qnodePipeline);
             passEncoder.setBindGroup(0, state.bindGroup);
@@ -845,14 +1128,19 @@ function render(state) {
     state.device.queue.submit([commandEncoder.finish()]);
 }
 
+// Dragging the full-size canvas rotates the current view around the vertical axis.
 let webgpuState;
 let isDragging = false;
 let previousMousePosition = { x: 0, y: 0 };
 
 canvas.addEventListener('mousedown', e => {
     isDragging = true;
+    clearQsphereHover();
     previousMousePosition = { x: e.clientX, y: e.clientY };
 });
+
+canvas.addEventListener('mousemove', updateQsphereHover);
+canvas.addEventListener('mouseleave', clearQsphereHover);
 window.addEventListener('mousemove', e => {
     if (!isDragging) return;
     const deltaX = e.clientX - previousMousePosition.x;
@@ -866,6 +1154,7 @@ window.addEventListener('mouseup', () => {
     isDragging = false;
 });
 
+// Positions of the six standard Bloch labels in model space.
 const blochLabelDefs = [
     { id: 'label-zero', pos: [0, 1.15, 0] },
     { id: 'label-one', pos: [0, -1.15, 0] },
@@ -875,6 +1164,7 @@ const blochLabelDefs = [
     { id: 'label-i-minus', pos: [0, 0, -1.15] }
 ];
 
+// Project and position either Bloch labels or Q-sphere basis labels.
 function updateLabels(modelMatrix) {
     const rect = canvas.getBoundingClientRect();
     const w = rect.width;
@@ -908,8 +1198,10 @@ function updateLabels(modelMatrix) {
     }
 }
 
+// Recreate Q-sphere labels when the number of basis states changes.
 let _qsLabelData = [];
 
+// Place the existing Q-sphere labels after each rotation.
 function rebuildQsphereLabels(points, N) {
     const qsLabelsDiv = document.getElementById('qs-labels');
     if (!qsLabelsDiv) return;
@@ -926,6 +1218,7 @@ function rebuildQsphereLabels(points, N) {
     }
 }
 
+// Project all Q-sphere label positions into the canvas.
 function updateQsphereLabels(modelMatrix, w, h) {
     for (const item of _qsLabelData) {
         const pt = projectPoint(item.pos, modelMatrix, w, h);
@@ -938,6 +1231,8 @@ function updateQsphereLabels(modelMatrix, w, h) {
     }
 }
 
+// Main animation loop: interpolate arrows, update transforms, draw full-size and
+// mini views, then schedule the next frame.
 function frame() {
     if (webgpuState) {
         if (currentMode === 'bloch' && webgpuState.currentVector && webgpuState.targetVector) {
@@ -996,6 +1291,7 @@ initWebGPU()
         setStatus('WebGPU setup failed.');
     });
 
+// Resize the shared surface and rebuild its projection when the panel size changes.
 window.addEventListener('resize', () => {
     resizeCanvas();
     if (webgpuState) {
@@ -1004,15 +1300,39 @@ window.addEventListener('resize', () => {
     }
 });
 
+// Show one view's DOM and hide the other. The container is removed/reinserted to
+// prevent stale Q-sphere pixels from remaining behind Bloch cards.
 function updateVisibility(qubitsDeclared) {
-    const container = document.getElementById('container');
-    const controls = document.getElementById('controls');
-    // The original single-sphere canvas is kept as an internal WebGPU surface
-    // for shader/device setup. The visible UI is the full-size sphere per qubit.
-    if (container) container.style.display = 'none';
-    if (controls) controls.style.display = qubitsDeclared > 0 ? 'flex' : 'none';
+    const container = qsphereContainer;
+    const controls = controlsContainer;
+    const phaseLegend = document.getElementById('qsphere-phase-legend');
+    if (container) {
+        const showQsphere = currentMode === 'qsphere';
+        if (showQsphere && !container.parentElement) {
+            // Keep the legend after the sphere when the container is restored
+            // after switching back from the Bloch view.
+            document.body.insertBefore(container, phaseLegend || controls || null);
+        } else if (!showQsphere && container.parentElement) {
+            container.remove();
+        }
+        container.hidden = !showQsphere;
+        container.style.display = showQsphere ? 'block' : 'none';
+        canvas.style.visibility = showQsphere ? 'visible' : 'hidden';
+        canvas.style.display = showQsphere ? 'block' : 'none';
+        if (!showQsphere) {
+            const qsLabels = document.getElementById('qs-labels');
+            if (qsLabels) qsLabels.style.display = 'none';
+        }
+    }
+    if (controls) {
+        const showBloch = currentMode === 'bloch' && qubitsDeclared > 0;
+        controls.hidden = !showBloch;
+        controls.style.display = showBloch ? 'flex' : 'none';
+    }
+    if (phaseLegend) phaseLegend.style.display = currentMode === 'qsphere' ? 'block' : 'none';
 }
 
+// Rebuild the Bloch card list from the latest parser result.
 async function populateQubitColumn(result) {
     const column = document.getElementById('qubit-column');
     if (!column) return;
@@ -1053,6 +1373,7 @@ async function populateQubitColumn(result) {
     await renderMiniQubitColumn(result);
 }
 
+// Ignore stale source messages if an older Q# parse finishes after a newer edit.
 let currentTargetOp = null;
 let sourceUpdateGeneration = 0;
 
@@ -1079,18 +1400,7 @@ window.addEventListener('message', async event => {
 
             if (webgpuState) {
                 if (currentMode === 'qsphere') {
-                    const qs = computeQsphere(result);
-                    const nodeVerts = qs.nodeVertices;
-                    if (nodeVerts.byteLength <= webgpuState.qnodeVertexBuffer.size) {
-                        webgpuState.device.queue.writeBuffer(webgpuState.qnodeVertexBuffer, 0, nodeVerts);
-                        webgpuState.qnodeVertexCount = nodeVerts.length / 6;
-                    }
-                    const ringVerts = qs.ringVertices;
-                    if (ringVerts.byteLength <= webgpuState.lineVertexBuffer.size) {
-                        webgpuState.device.queue.writeBuffer(webgpuState.lineVertexBuffer, 0, ringVerts);
-                        webgpuState.lineVertexCount = ringVerts.length / 6;
-                    }
-                    rebuildQsphereLabels(qs.points, qs.N);
+                    updateQsphereState(result);
                 } else {
                     const arrowResult = computeBlochArrow(result, selectedQubitIndex);
                     webgpuState.stepVectors = arrowResult.stepVectors || [];

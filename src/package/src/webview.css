@@ -1,3 +1,4 @@
+/* The webview is transparent so VS Code's panel supplies the background. */
 body {
     display: flex;
     flex-direction: column;
@@ -11,25 +12,145 @@ body {
     box-sizing: border-box;
 }
 
+/* Heading and tabs share the same left edge. */
 #title {
-    margin: 0 0 18px;
+    width: min(100%, 1100px);
+    margin: 0 0 10px;
     font-family: system-ui, -apple-system, sans-serif;
     font-size: 20px;
     font-weight: 600;
     color: #e6e6ee;
-    text-align: center;
+    text-align: left;
 }
 
+/* The tabs intentionally use only a separator between choices. */
+#view-tabs {
+    display: flex;
+    align-self: flex-start;
+    justify-content: flex-start;
+    width: min(100%, 1100px);
+    margin: 0 0 18px;
+}
+
+.view-tab {
+    margin: 0;
+    padding: 7px 14px 8px;
+    border: 0;
+    background: transparent;
+    color: rgba(230, 230, 238, 0.68);
+    cursor: pointer;
+    font: 600 13px system-ui, -apple-system, sans-serif;
+}
+
+.view-tab + .view-tab {
+    border-left: 1px solid rgba(220, 220, 235, 0.35);
+}
+
+.view-tab:hover,
+.view-tab.active {
+    color: #e6e6ee;
+}
+
+.view-tab.active {
+    font-weight: 700;
+}
+
+/* Full-size Q-sphere canvas. It is detached/hidden when Bloch mode is active. */
 #container {
     display: none;
+    position: relative;
+    width: 270px;
+    height: 270px;
+    flex: 0 0 270px;
 }
 
+#container[hidden],
+#controls[hidden] {
+    display: none !important;
+}
+
+/* Phase legend sits below the Q-sphere and is hidden in Bloch mode. */
+#qsphere-phase-legend {
+    position: relative;
+    display: none;
+    align-self: center;
+    width: 270px;
+    height: 100px;
+    margin: 2px 0 16px;
+}
+
+/* The canvas is anchored to the right side of the compact legend. */
+#qsphere-phase-wheel {
+    position: absolute;
+    top: 0;
+    right: 2px;
+    width: 80px;
+    height: 80px;
+}
+
+/* Labels are absolutely positioned around the wheel; they do not intercept input. */
+.phase-label,
+.phase-center {
+    position: absolute;
+    color: #e6e6ee;
+    font: 600 11px system-ui, -apple-system, sans-serif;
+    pointer-events: none;
+    user-select: none;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+}
+
+.phase-top {
+    top: -12px;
+    left: calc(100% - 42px);
+    transform: translateX(-50%);
+}
+
+.phase-right {
+    top: 32px;
+    left: calc(100% - 2px);
+}
+
+.phase-bottom {
+    top: 84px;
+    left: calc(100% - 42px);
+    transform: translateX(-50%);
+}
+
+.phase-left {
+    top: 32px;
+    left: calc(100% - 86px);
+    transform: translateX(-100%);
+}
+
+.phase-center {
+    top: 32px;
+    left: calc(100% - 42px);
+    color: #e6e6ee;
+    font-size: 10px;
+    transform: translateX(-50%);
+}
+
+/* These guards make mode changes deterministic even while JavaScript is updating
+   inline display/hidden properties. */
+body[data-visualization-mode="bloch"] #container,
+body[data-visualization-mode="bloch"] #canvas {
+    display: none !important;
+    visibility: hidden !important;
+}
+
+body[data-visualization-mode="qsphere"] #controls {
+    display: none !important;
+    visibility: hidden !important;
+}
+
+/* Every WebGPU canvas is sized by its surrounding stage. */
 canvas {
     width: 100%;
     height: 100%;
     background-color: transparent;
 }
 
+/* Labels over the full-size Bloch canvas. */
 .label {
     position: absolute;
     top: 0;
@@ -44,6 +165,7 @@ canvas {
     will-change: transform;
 }
 
+/* Bloch view owns the vertically stacked qubit cards. */
 #controls {
     display: flex;
     flex-direction: column;
@@ -62,6 +184,7 @@ canvas {
     width: 100%;
 }
 
+/* A card contains a qubit name, a canvas, and its interactive stage. */
 .qubit-mini {
     display: flex;
     flex-direction: column;
@@ -86,6 +209,7 @@ canvas {
     display: block;
 }
 
+/* The stage gives each mini canvas a positioning context for labels and hover text. */
 .qubit-sphere-stage {
     position: relative;
     width: 270px;
@@ -109,6 +233,7 @@ canvas {
     pointer-events: none;
 }
 
+/* Mini Bloch labels are positioned by JavaScript after each render. */
 .qubit-bloch-label {
     position: absolute;
     top: 0;
@@ -124,6 +249,7 @@ canvas {
     white-space: nowrap;
 }
 
+/* Hover information is a non-interactive overlay so the pointer remains on the arrow. */
 .qubit-hover-info {
     position: absolute;
     z-index: 5;
@@ -141,6 +267,7 @@ canvas {
     display: none;
 }
 
+/* Hidden by default; the runtime can use it for parser feedback. */
 #status {
     display: none;
     min-height: 1.2em;

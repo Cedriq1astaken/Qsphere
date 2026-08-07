@@ -1,7 +1,15 @@
+// Bloch-vector conversion and arrow-mesh generation.
+// This file is shared by the WebGPU renderer and the small Node-friendly tests.
+
+// Squared magnitude of a complex amplitude. For a normalized state this is the
+// probability of the corresponding computational-basis state.
 function complexAbs2(value) {
     return value.re * value.re + value.im * value.im;
 }
 
+// Reduce a full multi-qubit state to one qubit's 2x2 density matrix and convert
+// that matrix into Bloch coordinates [x, y, z]. Entanglement naturally produces
+// vectors shorter than one because the reduced qubit can be mixed.
 function extractQubitBloch(snapshot, targetQubit) {
     if (!snapshot || snapshot.qubits === 0 || targetQubit >= snapshot.qubits) return [0, 0, 1];
     const state = snapshot.amplitudes;
@@ -25,6 +33,8 @@ function extractQubitBloch(snapshot, targetQubit) {
     return [2 * rho10Re, 2 * rho10Im, rho00 - rho11];
 }
 
+// Find the axis-angle rotation that moves the mesh's default +Z direction onto
+// the requested Bloch vector. The two near-parallel cases avoid a zero cross product.
 function alignmentRotation(targetVec) {
     const from = [0, 0, 1];
     const to = vec3Normalize(targetVec);
@@ -37,6 +47,9 @@ function alignmentRotation(targetVec) {
     };
 }
 
+// Build a shaded arrow aligned with the +Z axis, then rotate every position and
+// normal into the requested direction. Each vertex uses a six-float stride:
+// position xyz followed by normal xyz.
 function buildArrowVertices(blochVec, options) {
     const r = Math.sqrt(blochVec[0] ** 2 + blochVec[1] ** 2 + blochVec[2] ** 2);
     if (r < 0.001) return new Float32Array(0);
@@ -53,12 +66,14 @@ function buildArrowVertices(blochVec, options) {
     const verts = [];
     const { axis, angle } = alignmentRotation(blochVec);
 
+    // Apply the same alignment to both geometry positions and lighting normals.
     function pushVertex(pos, norm) {
         const rp = rodriguesRotate(pos, axis, angle);
         const rn = vec3Normalize(rodriguesRotate(norm, axis, angle));
         verts.push(rp[0], rp[1], rp[2], rn[0], rn[1], rn[2]);
     }
 
+    // Cylindrical shaft.
     for (let i = 0; i < segments; i++) {
         const a0 = (i / segments) * 2 * Math.PI;
         const a1 = ((i + 1) / segments) * 2 * Math.PI;
@@ -73,8 +88,10 @@ function buildArrowVertices(blochVec, options) {
         pushVertex(bot1, n1); pushVertex(top1, n1); pushVertex(top0, n0);
     }
 
+    // Conical arrow head.
     const tipZ = shaftLength + headLength;
     const coneSlope = headLength > 0 ? headRadius / headLength : 0;
+    // Close the exposed base with a cap so the arrow does not look hollow.
     for (let i = 0; i < segments; i++) {
         const a0 = (i / segments) * 2 * Math.PI;
         const a1 = ((i + 1) / segments) * 2 * Math.PI;
@@ -102,6 +119,8 @@ function buildArrowVertices(blochVec, options) {
     return new Float32Array(verts);
 }
 
+// Convert every captured snapshot into an animation frame. The renderer uses the
+// last frame for the current arrow and the complete list for replay animation.
 function computeBlochArrow(result, targetQubit = 0) {
     const snapshots = result?.states || [];
     const stepVectors = snapshots.map(snapshot => {
@@ -117,6 +136,7 @@ function computeBlochArrow(result, targetQubit = 0) {
     };
 }
 
+// Expose the same helpers to CommonJS tests and to the browser webview.
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { extractQubitBloch, buildArrowVertices, computeBlochArrow };
 } else if (typeof window !== 'undefined') {

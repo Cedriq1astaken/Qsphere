@@ -2,17 +2,25 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 
+// The extension host has two jobs:
+// 1. Add commands and CodeLens buttons to Q# editors.
+// 2. Create the webview and keep its source code synchronized with the editor.
 export function activate(context: vscode.ExtensionContext) {
     console.log('Qsphere extension active for .qs files!');
 
+    // These values describe the operation whose state the user asked to inspect.
+    // They are passed to the webview so it can filter snapshots to that operation.
     let activeTargetOp: { name: string, startLine: number, endLine: number } | undefined;
     let activePanel: vscode.WebviewPanel | undefined;
 
+    // Opens a new visualizer beside the current Q# editor.
     const openVisualizerDisposable = vscode.commands.registerCommand('qsphere.openVisualizer', (targetOp?: { name: string, startLine: number, endLine: number }) => {
         if (targetOp) {
             activeTargetOp = targetOp;
         }
 
+        // Prefer the open editor's source. The bundled test program is only a fallback
+        // for opening the command when no Q# document is active.
         const activeEditor = vscode.window.activeTextEditor;
         const sourceDocument = activeEditor?.document;
         const fileName = sourceDocument?.fileName || 'test.qs';
@@ -25,6 +33,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         const titleName = activeTargetOp?.name ? `Qsphere: ${activeTargetOp.name}` : 'Qsphere Quantum Visualizer';
 
+        // The webview can load only resources inside the extension's src directory.
         const panel = vscode.window.createWebviewPanel(
             'qsphereVisualizer',
             titleName,
@@ -38,10 +47,15 @@ export function activate(context: vscode.ExtensionContext) {
         activePanel = panel;
 
         panel.webview.html = getWebviewContent(context, panel.webview);
+
+        // All source updates go through this small message helper so init and update
+        // messages always have the same payload shape.
         const postSource = (command: 'init' | 'update', code: string, sourceName: string) => {
             panel.webview.postMessage({ command, data: { fileName: sourceName, code, targetOp: activeTargetOp } });
         };
 
+        // The webview sends "ready" after its scripts have loaded. Sending the initial
+        // program again here handles slow resource loading without a race.
         const readyDisposable = panel.webview.onDidReceiveMessage(message => {
             if (message.command !== 'ready') return;
             const currentEditor = vscode.window.activeTextEditor;
@@ -54,6 +68,8 @@ export function activate(context: vscode.ExtensionContext) {
 
         postSource('init', codeContent, fileName);
 
+        // Debounce editor changes so a fast typing burst does not start one Q# debug
+        // execution per keystroke.
         let updateTimer: ReturnType<typeof setTimeout> | undefined;
         const trackedUri = sourceDocument?.uri.toString();
         const changeDisposable = vscode.workspace.onDidChangeTextDocument(event => {
@@ -65,6 +81,7 @@ export function activate(context: vscode.ExtensionContext) {
             }, 150);
         });
 
+        // Dispose listeners and timers with the panel to avoid retaining editor state.
         panel.onDidDispose(() => {
             if (updateTimer) clearTimeout(updateTimer);
             if (activePanel === panel) activePanel = undefined;
@@ -73,10 +90,14 @@ export function activate(context: vscode.ExtensionContext) {
         });
     });
 
+    // Replay is intentionally a lightweight command: the webview owns the animation
+    // state, so the extension host only forwards the request.
     const replayAnimationDisposable = vscode.commands.registerCommand('qsphere.replayAnimation', () => {
         activePanel?.webview.postMessage({ command: 'replayAnimation' });
     });
 
+    // Adds state buttons only where they are useful: on Main and on calls to user
+    // operations. Gate declarations such as H and X are deliberately ignored.
     const codeLensProvider = vscode.languages.registerCodeLensProvider(
         [{ pattern: '**/*.qs' }, { language: 'qsharp' }],
         {
@@ -93,7 +114,9 @@ export function activate(context: vscode.ExtensionContext) {
                     if (!match) continue;
                     const opName = match[1];
 
-                    // Determine operation brace range
+                    // Count braces from the declaration until its matching closing
+                    // brace. This intentionally stays simple because CodeLens only
+                    // needs a useful source range, not a full Q# parser.
                     let braceCount = 0;
                     let foundOpenBrace = false;
                     let endLine = line;
@@ -159,8 +182,12 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {}
 
+// Converts the local HTML template into a CSP-safe webview document. Every local
+// script, shader, stylesheet, and data file is rewritten as a webview URI.
 function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Webview): string {
     const sourceRoot = path.join(context.extensionPath, 'src');
+    // Keep these paths explicit: the HTML template refers to these files by stable
+    // placeholder names, while VS Code requires resource URIs at runtime.
     const templatePath = path.join(sourceRoot, 'webview.html');
     const cssPath = path.join(sourceRoot, 'webview.css');
     const runtimePath = path.join(sourceRoot, 'script', 'qsharpRuntime.bundle.js');
@@ -175,6 +202,7 @@ function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Web
     const arrowShaderPath = path.join(sourceRoot, 'shader', 'fragment_arrow.wgsl');
     const linesShaderPath = path.join(sourceRoot, 'shader', 'fragment_lines.wgsl');
     const qnodesShaderPath = path.join(sourceRoot, 'shader', 'fragment_qnodes.wgsl');
+    const qnodesVertexShaderPath = path.join(sourceRoot, 'shader', 'qnodes_vertex.wgsl');
     const testQsPath = path.join(sourceRoot, 'test.qs');
     const template = fs.readFileSync(templatePath, 'utf8');
     const uri = (filePath: string) => webview.asWebviewUri(vscode.Uri.file(filePath)).toString();
@@ -195,5 +223,6 @@ function getWebviewContent(context: vscode.ExtensionContext, webview: vscode.Web
         .replace('shader/fragment_arrow.wgsl', uri(arrowShaderPath))
         .replace('shader/fragment_lines.wgsl', uri(linesShaderPath))
         .replace('shader/fragment_qnodes.wgsl', uri(qnodesShaderPath))
+        .replace('shader/qnodes_vertex.wgsl', uri(qnodesVertexShaderPath))
         .replace('test.qs', uri(testQsPath));
 }

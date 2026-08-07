@@ -1,3 +1,4 @@
+// Purple shaded arrow used by the Bloch renderers.
 struct FragmentInput {
     @builtin(position) position: vec4f,
     @location(0) normal: vec3f,

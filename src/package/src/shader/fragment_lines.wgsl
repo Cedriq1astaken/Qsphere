@@ -1,3 +1,4 @@
+// Semi-transparent neutral lines for Bloch axes and great circles.
 struct FragmentInput {
     @builtin(position) position: vec4f,
     @location(0) normal: vec3f,

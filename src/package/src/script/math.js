@@ -2,20 +2,24 @@
 //  Complex Number
 // ═══════════════════════════════════════════════════════════════
 
+// Small immutable-style complex-number helper used by state math.
 class Complex {
     constructor(re, im) {
         this.re = re || 0;
         this.im = im || 0;
     }
 
+    // Add two complex values.
     add(other) {
         return new Complex(this.re + other.re, this.im + other.im);
     }
 
+    // Subtract another complex value.
     sub(other) {
         return new Complex(this.re - other.re, this.im - other.im);
     }
 
+    // Multiply by either a scalar or another complex value.
     mul(other) {
         if (typeof other === 'number') {
             return new Complex(this.re * other, this.im * other);
@@ -26,10 +30,12 @@ class Complex {
         );
     }
 
+    // Return the complex conjugate.
     conj() {
         return new Complex(this.re, -this.im);
     }
 
+    // Squared magnitude, which corresponds to probability for amplitudes.
     abs2() {
         return this.re * this.re + this.im * this.im;
     }
@@ -39,16 +45,19 @@ class Complex {
 //  Vec3 — 3-component vector helpers (arrays [x, y, z])
 // ═══════════════════════════════════════════════════════════════
 
+// Euclidean length of a 3D vector.
 function vec3Len(v) {
     return Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
 }
 
+// Normalize a vector, falling back to +Z for a zero-length input.
 function vec3Normalize(v) {
     const len = vec3Len(v);
     if (len < 1e-10) return [0, 0, 1];
     return [v[0] / len, v[1] / len, v[2] / len];
 }
 
+// Cross product used to construct rotation axes and surface directions.
 function vec3Cross(a, b) {
     return [
         a[1] * b[2] - a[2] * b[1],
@@ -57,10 +66,12 @@ function vec3Cross(a, b) {
     ];
 }
 
+// Dot product used for projections, angles, and lighting.
 function vec3Dot(a, b) {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
+// Rotate vector p around axis k using Rodrigues' rotation formula.
 function rodriguesRotate(p, k, angle) {
     const c = Math.cos(angle);
     const s = Math.sin(angle);
@@ -74,6 +85,7 @@ function rodriguesRotate(p, k, angle) {
 }
 
 /** Spherical linear interpolation between two vectors, preserving and interpolating magnitude r. */
+// Spherical interpolation between directions while linearly interpolating length.
 function interpolateVector(current, target, factor) {
     const lenCurrent = vec3Len(current);
     const lenTarget = vec3Len(target);
@@ -123,6 +135,7 @@ function interpolateVector(current, target, factor) {
 // ═══════════════════════════════════════════════════════════════
 
 /** Multiply two column-major 4×4 matrices: result = A × B. */
+// Multiply two column-major matrices: result = A * B.
 function mult(A, B) {
     const out = new Float32Array(16);
     for (let col = 0; col < 4; col++) {
@@ -138,12 +151,14 @@ function mult(A, B) {
 }
 
 /** Multiply an arbitrary number of 4×4 matrices left-to-right: A × B × C × … */
+// Reduce a list of transforms to one left-to-right product.
 function mat4Chain(...matrices) {
     return matrices.reduce(mult);
 }
 
 // ── Matrix constructors ──────────────────────────────────────
 
+// Perspective projection used by the full Q-sphere and mini Bloch stages.
 function createPerspectiveMatrix(fovY, aspect, near, far) {
     const f = 1.0 / Math.tan(fovY / 2);
     const nf = 1.0 / (near - far);
@@ -156,6 +171,7 @@ function createPerspectiveMatrix(fovY, aspect, near, far) {
     return out;
 }
 
+// Translation matrix used to place the camera/model along the view axis.
 function createTranslationMatrix(x, y, z) {
     const out = new Float32Array(16);
     out[0] = 1.0;
@@ -172,6 +188,7 @@ function createTranslationMatrix(x, y, z) {
 // Each returns a pure rotation matrix.  Use mult() or mat4Chain()
 // to compose them with other transforms.
 
+// Pure axis rotation matrices are composed into model-view-projection transforms.
 function mat4RotationX(angle) {
     const out = new Float32Array(16);
     const c = Math.cos(angle);
@@ -231,6 +248,7 @@ function rotateMatrix(rotX, rotY, rotZ, base) {
 //  Geometry Builders
 // ═══════════════════════════════════════════════════════════════
 
+// Convert spherical coordinates to a point on the unit sphere.
 function getSpherePoint(theta, phi) {
     return [
         Math.sin(theta) * Math.cos(phi),
@@ -305,6 +323,7 @@ function buildSphereLines(segments) {
  * Project a 3D point through a 4×4 MVP matrix to 2D screen coordinates.
  * Returns [screenX, screenY] or null if behind the camera (clipW ≤ 0).
  */
+// Project a 3D point through an MVP matrix into canvas pixel coordinates.
 function projectPoint(p, matrix, width, height) {
     const x = p[0], y = p[1], z = p[2];
     const clipX = matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12];
@@ -321,3 +340,5 @@ function projectPoint(p, matrix, width, height) {
 
     return [screenX, screenY];
 }
+// Shared math primitives for the visualizer. The browser loads this file directly,
+// so the helpers intentionally use plain arrays and typed arrays instead of imports.

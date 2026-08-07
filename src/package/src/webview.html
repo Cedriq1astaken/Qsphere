@@ -5,7 +5,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Qsphere Visualizer</title>
+    <!-- The extension host replaces these local paths with webview-safe URIs. -->
     <link rel="stylesheet" href="webview.css">
+    <!-- Runtime/parser dependencies must load before the visualizer script. -->
     <script defer src="script/qsharpRuntime.bundle.js"></script>
     <script defer src="script/qsharpRuntimeUi.js"></script>
     <script defer src="script/math.js"></script>
@@ -15,7 +17,18 @@
 </head>
 
 <body>
+    <!-- Shared heading and mode switch for the two visualization views. -->
     <h1 id="title">Qubit State Visualization</h1>
+    <div id="view-tabs" role="tablist" aria-label="Visualization mode">
+        <button class="view-tab active" type="button" role="tab" aria-selected="true" data-view-mode="bloch">
+            Bloch
+        </button>
+        <button class="view-tab" type="button" role="tab" aria-selected="false" data-view-mode="qsphere">
+            Q-sphere
+        </button>
+    </div>
+    <!-- The main WebGPU surface is used by the Q-sphere view. The Bloch view
+         uses one mini canvas per qubit, created dynamically in #qubit-column. -->
     <div id="container">
         <canvas id="canvas"
                 data-vertex-shader="shader/vertex.wgsl"
@@ -23,8 +36,10 @@
                 data-arrow-shader="shader/fragment_arrow.wgsl"
                 data-lines-shader="shader/fragment_lines.wgsl"
                 data-qnodes-shader="shader/fragment_qnodes.wgsl"
+                data-qnodes-vertex-shader="shader/qnodes_vertex.wgsl"
                 data-qsharp-wasm="wasm/qsc_wasm_bg.wasm"
                 data-test-qs="test.qs"></canvas>
+        <!-- Labels positioned over the original full-size Bloch canvas. -->
         <div id="bloch-labels">
             <div class="label" id="label-zero">|0⟩</div>
             <div class="label" id="label-one">|1⟩</div>
@@ -33,11 +48,23 @@
             <div class="label" id="label-i-plus">|+i⟩</div>
             <div class="label" id="label-i-minus">|-i⟩</div>
         </div>
+        <!-- Q-sphere basis-state labels are rebuilt from the current qubit count. -->
         <div id="qs-labels"></div>
     </div>
+    <!-- A compact phase-to-color key. The wheel itself is painted by webview.js. -->
+    <div id="qsphere-phase-legend" aria-label="Q-sphere phase color legend">
+        <canvas id="qsphere-phase-wheel" width="80" height="80"></canvas>
+        <div class="phase-label phase-top">π/2</div>
+        <div class="phase-label phase-right">0</div>
+        <div class="phase-label phase-bottom">3π/2</div>
+        <div class="phase-label phase-left">π</div>
+        <div class="phase-center">Phase</div>
+    </div>
+    <!-- Bloch-mode qubit cards are inserted here after Q# execution completes. -->
     <div id="controls">
         <div id="qubit-column"></div>
     </div>
+    <!-- Kept for parser errors and transient status messages. -->
     <p id="status"></p>
 </body>
 
