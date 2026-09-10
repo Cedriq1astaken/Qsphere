@@ -176,13 +176,20 @@ async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
 }
 
 function parseQSharp(source, targetOp, targetLine) {
-    const wasmElement = document.querySelector('[data-qsharp-wasm]');
-    return executeQSharp(source, 'main.qs', wasmElement?.dataset.qsharpWasm, targetOp, targetLine);
+    const wasmElement = typeof document !== 'undefined' ? document.querySelector('[data-qsharp-wasm]') : null;
+    return executeQSharp(source, 'main.qs', wasmElement?.dataset?.qsharpWasm, targetOp, targetLine);
 }
 
 if (typeof window !== 'undefined') {
     window.parseQSharp = parseQSharp;
 }
 
-
-
+export {
+    ensureWasm,
+    snapshotFromEntries,
+    areSnapshotsEqual,
+    snapshotSignature,
+    formatFailure,
+    executeQSharp,
+    parseQSharp
+};
