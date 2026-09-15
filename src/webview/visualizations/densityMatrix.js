@@ -310,6 +310,9 @@ function createSingle3DScene(canvasElement, isReal) {
     const gridGroup = new THREE.Group();
     plotGroup.add(gridGroup);
 
+    const labelGroup = new THREE.Group();
+    plotGroup.add(labelGroup);
+
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
@@ -354,6 +357,7 @@ function createSingle3DScene(canvasElement, isReal) {
         plotGroup,
         barGroup,
         gridGroup,
+        labelGroup,
         isReal,
         labelData: []
     };
@@ -447,8 +451,102 @@ function update3DScenes(amplitudes, N) {
     if (threeImag) updateSingle3DScene(threeImag, matrix, numStates, N, false, imagLabels3D);
 }
 
+/**
+ * Computes 3D position coordinates for basis state labels along column and row axes.
+ * @param {number} numStates
+ * @param {number} N
+ * @returns {{ colLabels: Array<{ ket: string, pos: [number, number, number] }>, rowLabels: Array<{ ket: string, pos: [number, number, number] }>, spacing: number, halfGrid: number, spriteHeight: number }}
+ */
+function compute3DLabelPositions(numStates, N) {
+    if (numStates <= 0) return { colLabels: [], rowLabels: [], spacing: 0, halfGrid: 0, spriteHeight: 0 };
+    const spacing = Math.min(0.55, 2.5 / numStates);
+    const gridTotal = numStates * spacing;
+    const halfGrid = gridTotal / 2;
+    const spriteHeight = Math.min(0.38, Math.max(0.20, spacing * 0.75));
+    const y = spriteHeight * 0.40;
+
+    const colLabels = [];
+    for (let j = 0; j < numStates; j++) {
+        const x = -halfGrid + j * spacing + spacing / 2;
+        const z = halfGrid + spriteHeight * 0.5 + 0.08;
+        const ket = formatBasisState(j, N);
+        colLabels.push({ ket, pos: [x, y, z] });
+    }
+
+    const rowLabels = [];
+    for (let i = 0; i < numStates; i++) {
+        const x = -halfGrid - 0.10;
+        const z = -halfGrid + i * spacing + spacing / 2;
+        const ket = formatBasisState(i, N);
+        rowLabels.push({ ket, pos: [x, y, z] });
+    }
+
+    return { colLabels, rowLabels, spacing, halfGrid, spriteHeight };
+}
+
+/**
+ * Creates a Three.js Sprite for a basis state label with high-DPI text and depth testing.
+ * @param {string} text
+ * @param {number} spacing
+ * @param {'center'|'right'} [align='center']
+ * @returns {THREE.Sprite | null}
+ */
+function createLabelSprite(text, spacing, align = 'center') {
+    if (typeof document === 'undefined') return null;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    const fontPx = 48;
+    ctx.font = `600 ${fontPx}px system-ui, -apple-system, sans-serif`;
+    const metrics = ctx.measureText(text);
+    const textWidth = Math.ceil(metrics.width);
+    const textHeight = fontPx;
+
+    const padX = 8;
+    const padY = 4;
+    canvas.width = textWidth + padX * 2;
+    canvas.height = textHeight + padY * 2;
+
+    ctx.font = `600 ${fontPx}px system-ui, -apple-system, sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
+    ctx.shadowBlur = 6;
+    ctx.shadowOffsetY = 2;
+
+    ctx.fillStyle = 'rgba(230, 230, 238, 0.92)';
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+
+    const spriteMat = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        depthTest: true,
+        depthWrite: false
+    });
+    const sprite = new THREE.Sprite(spriteMat);
+    sprite.renderOrder = 2;
+    if (align === 'right') {
+        sprite.center.set(1.0, 0.5);
+    } else {
+        sprite.center.set(0.5, 0.5);
+    }
+
+    const aspect = canvas.width / canvas.height;
+    const spriteHeight = Math.min(0.38, Math.max(0.20, spacing * 0.75));
+    const spriteWidth = spriteHeight * aspect;
+    sprite.scale.set(spriteWidth, spriteHeight, 1);
+    sprite.raycast = () => {}; // Ignore raycasting hits so tooltip hover is never blocked
+    return sprite;
+}
+
 function updateSingle3DScene(inst, matrix, numStates, N, isReal, labelsDiv) {
-    const { barGroup, gridGroup } = inst;
+    const { barGroup, gridGroup, labelGroup } = inst;
 
     while (barGroup.children.length > 0) {
         const child = barGroup.children[0];
@@ -465,6 +563,18 @@ function updateSingle3DScene(inst, matrix, numStates, N, isReal, labelsDiv) {
         gridGroup.remove(child);
         if (child.geometry) child.geometry.dispose();
         if (child.material) child.material.dispose();
+    }
+
+    if (labelGroup) {
+        while (labelGroup.children.length > 0) {
+            const child = labelGroup.children[0];
+            labelGroup.remove(child);
+            if (child.material) {
+                if (child.material.map) child.material.map.dispose();
+                child.material.dispose();
+            }
+            if (child.geometry) child.geometry.dispose();
+        }
     }
 
     inst.labelData = [];
@@ -579,27 +689,23 @@ function updateSingle3DScene(inst, matrix, numStates, N, isReal, labelsDiv) {
     }
     barGroup.add(instancedMesh);
 
-    if (labelsDiv) {
-        for (let j = 0; j < numStates; j++) {
-            const x = -halfGrid + j * spacing + spacing / 2;
-            const z = halfGrid + 0.22;
-            const ket = formatBasisState(j, N);
-            const el = document.createElement('div');
-            el.className = 'density-3d-label';
-            el.textContent = ket;
-            labelsDiv.appendChild(el);
-            inst.labelData.push({ el, pos: [x, 0, z] });
+    const { colLabels, rowLabels } = compute3DLabelPositions(numStates, N);
+
+    if (labelGroup) {
+        for (const item of colLabels) {
+            const sprite = createLabelSprite(item.ket, spacing, 'center');
+            if (sprite) {
+                sprite.position.set(item.pos[0], item.pos[1], item.pos[2]);
+                labelGroup.add(sprite);
+            }
         }
 
-        for (let i = 0; i < numStates; i++) {
-            const x = -halfGrid - 0.22;
-            const z = -halfGrid + i * spacing + spacing / 2;
-            const ket = formatBasisState(i, N);
-            const el = document.createElement('div');
-            el.className = 'density-3d-label';
-            el.textContent = ket;
-            labelsDiv.appendChild(el);
-            inst.labelData.push({ el, pos: [x, 0, z] });
+        for (const item of rowLabels) {
+            const sprite = createLabelSprite(item.ket, spacing, 'right');
+            if (sprite) {
+                sprite.position.set(item.pos[0], item.pos[1], item.pos[2]);
+                labelGroup.add(sprite);
+            }
         }
     }
 }
@@ -611,25 +717,12 @@ function render3DScenes() {
         inst.plotGroup.rotation.set(rotation3D[0], rotation3D[1], rotation3D[2]);
         try {
             inst.renderer.render(inst.scene, inst.camera);
-            update3DLabels(inst);
         } catch (e) {}
     }
 }
 
 function update3DLabels(inst) {
-    if (!inst?.canvas || !inst.labelData) return;
-    const w = inst.canvas.clientWidth || 340;
-    const h = inst.canvas.clientHeight || 320;
-
-    for (const item of inst.labelData) {
-        const pt = project3DPoint(item.pos, inst.camera, w, h);
-        if (pt) {
-            item.el.style.transform = `translate(-50%, -50%) translate(${pt[0]}px, ${pt[1]}px)`;
-            item.el.style.display = 'block';
-        } else {
-            item.el.style.display = 'none';
-        }
-    }
+    // State labels are rendered natively in WebGL with depth testing via Three.js Sprites
 }
 
 function project3DPoint(pos, camera, width, height) {
@@ -981,5 +1074,7 @@ export {
     drawDensityMatrixWithAmplitudes,
     generateDensityMatrixPng,
     setDensityMode,
-    getDensityMode
+    getDensityMode,
+    compute3DLabelPositions,
+    createLabelSprite
 };

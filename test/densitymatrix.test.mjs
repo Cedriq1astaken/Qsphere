@@ -143,4 +143,58 @@ describe('Density Matrix Visualization Module', () => {
         assert.ok(legendX > padding, 'Legend start X should be greater than left padding');
         assert.ok(legendX + legendW < cssTotalW - padding, 'Legend end X should be within canvas bounds');
     });
+
+    test('compute3DLabelPositions calculates positions for 1-qubit system', async () => {
+        const { compute3DLabelPositions } = await import('../src/webview/visualizations/densityMatrix.js');
+        const res = compute3DLabelPositions(2, 1);
+        assert.strictEqual(res.colLabels.length, 2);
+        assert.strictEqual(res.rowLabels.length, 2);
+
+        assert.strictEqual(res.colLabels[0].ket, '|0⟩');
+        assert.strictEqual(res.colLabels[1].ket, '|1⟩');
+        assert.strictEqual(res.rowLabels[0].ket, '|0⟩');
+        assert.strictEqual(res.rowLabels[1].ket, '|1⟩');
+
+        // Column labels along z = halfGrid + spriteHeight * 0.5 + 0.08
+        assert.strictEqual(res.colLabels[0].pos[2], res.halfGrid + res.spriteHeight * 0.5 + 0.08);
+        assert.strictEqual(res.colLabels[1].pos[2], res.halfGrid + res.spriteHeight * 0.5 + 0.08);
+
+        // Row labels along x = -halfGrid - 0.10
+        assert.strictEqual(res.rowLabels[0].pos[0], -res.halfGrid - 0.10);
+        assert.strictEqual(res.rowLabels[1].pos[0], -res.halfGrid - 0.10);
+
+        // y position is slightly elevated at floor level
+        assert.ok(res.colLabels[0].pos[1] > 0);
+        assert.strictEqual(res.colLabels[0].pos[1], res.spriteHeight * 0.40);
+    });
+
+    test('compute3DLabelPositions calculates positions for 2-qubit system', async () => {
+        const { compute3DLabelPositions } = await import('../src/webview/visualizations/densityMatrix.js');
+        const res = compute3DLabelPositions(4, 2);
+        assert.strictEqual(res.colLabels.length, 4);
+        assert.strictEqual(res.rowLabels.length, 4);
+
+        assert.strictEqual(res.colLabels[0].ket, '|00⟩');
+        assert.strictEqual(res.colLabels[1].ket, '|01⟩');
+        assert.strictEqual(res.colLabels[2].ket, '|10⟩');
+        assert.strictEqual(res.colLabels[3].ket, '|11⟩');
+
+        assert.strictEqual(res.rowLabels[0].ket, '|00⟩');
+        assert.strictEqual(res.rowLabels[1].ket, '|01⟩');
+        assert.strictEqual(res.rowLabels[2].ket, '|10⟩');
+        assert.strictEqual(res.rowLabels[3].ket, '|11⟩');
+    });
+
+    test('compute3DLabelPositions handles 0 states gracefully', async () => {
+        const { compute3DLabelPositions } = await import('../src/webview/visualizations/densityMatrix.js');
+        const res = compute3DLabelPositions(0, 0);
+        assert.strictEqual(res.colLabels.length, 0);
+        assert.strictEqual(res.rowLabels.length, 0);
+    });
+
+    test('createLabelSprite safely returns null in Node environment without DOM', async () => {
+        const { createLabelSprite } = await import('../src/webview/visualizations/densityMatrix.js');
+        const sprite = createLabelSprite('|00⟩', 0.55);
+        assert.strictEqual(sprite, null);
+    });
 });

@@ -176,6 +176,17 @@ function stepStatevectorTransition(currentAmplitudes, targetAmplitudes, lerpFact
     };
 }
 
+function gcd(a, b) {
+    a = Math.abs(a);
+    b = Math.abs(b);
+    while (b) {
+        const t = b;
+        b = a % b;
+        a = t;
+    }
+    return a;
+}
+
 /**
  * Converts a quantum state (amplitudes array, snapshot, or visualizer result) into a KaTeX / LaTeX string.
  * @param {Array<{re: number, im: number}> | { amplitudes: Array, qubits?: number } | { states: Array }} stateInput
@@ -221,14 +232,66 @@ function formatQuantumStateKaTeX(stateInput, options = {}) {
         const absVal = Math.abs(val);
         if (symbolic) {
             if (Math.abs(absVal - 1) < eps) return '1';
-            if (Math.abs(absVal - Math.SQRT1_2) < eps) return '\\frac{1}{\\sqrt{2}}';
-            if (Math.abs(absVal - 0.5) < eps) return '\\frac{1}{2}';
-            if (Math.abs(absVal - Math.sqrt(3) / 2) < eps) return '\\frac{\\sqrt{3}}{2}';
-            if (Math.abs(absVal - 1 / Math.sqrt(3)) < eps) return '\\frac{1}{\\sqrt{3}}';
-            if (Math.abs(absVal - 0.5 * Math.SQRT1_2) < eps) return '\\frac{1}{2\\sqrt{2}}';
+
+            // 1. Check 1/sqrt(n) for any integer n (n = 2..100)
+            const nCand = Math.round(1 / (absVal * absVal));
+            if (nCand >= 2 && nCand <= 100 && Math.abs(absVal - 1 / Math.sqrt(nCand)) < eps) {
+                const s = Math.round(Math.sqrt(nCand));
+                if (s * s === nCand) {
+                    return `\\frac{1}{${s}}`;
+                }
+                let sqFactor = 1;
+                for (let k = Math.floor(Math.sqrt(nCand)); k >= 2; k--) {
+                    if (nCand % (k * k) === 0) {
+                        sqFactor = k;
+                        break;
+                    }
+                }
+                if (sqFactor > 1) {
+                    return `\\frac{1}{${sqFactor}\\sqrt{${nCand / (sqFactor * sqFactor)}}}`;
+                }
+                return `\\frac{1}{\\sqrt{${nCand}}}`;
+            }
+
+            // 2. Check sqrt(m)/s where v^2 approx m/(s^2) for s = 2..12, m < s^2 (e.g. sqrt(3)/2)
+            for (let s = 2; s <= 12; s++) {
+                const den = s * s;
+                const m = Math.round(absVal * absVal * den);
+                if (m >= 2 && m < den && Math.abs(absVal - Math.sqrt(m) / s) < eps) {
+                    let sqM = 1;
+                    for (let k = Math.floor(Math.sqrt(m)); k >= 2; k--) {
+                        if (m % (k * k) === 0) {
+                            sqM = k;
+                            break;
+                        }
+                    }
+                    const remM = m / (sqM * sqM);
+                    if (remM > 1) {
+                        const numStr = sqM > 1 ? `${sqM}\\sqrt{${remM}}` : `\\sqrt{${remM}}`;
+                        return `\\frac{${numStr}}{${s}}`;
+                    }
+                }
+            }
+
+            // 3. Check any rational fraction m/n for m < n (n = 2..64)
+            for (let n = 2; n <= 64; n++) {
+                const m = Math.round(absVal * n);
+                if (m >= 1 && m < n && Math.abs(absVal - m / n) < eps) {
+                    const g = gcd(m, n);
+                    return `\\frac{${m / g}}{${n / g}}`;
+                }
+            }
         }
         const rounded = Number(absVal.toFixed(precision));
         return String(rounded);
+    }
+
+    function formatImagCoeff(mag) {
+        if (mag === '1') return 'i';
+        if (mag.startsWith('\\frac{1}{')) {
+            return mag.replace(/^\\frac\{1\}\{/, '\\frac{i}{');
+        }
+        return `${mag}i`;
     }
 
     function formatCoeff(re, im, isFirst) {
@@ -251,18 +314,8 @@ function formatQuantumStateKaTeX(stateInput, options = {}) {
 
         // Pure Imaginary
         if (isRealZero) {
-            const isOne = Math.abs(Math.abs(im) - 1) < eps;
-            if (symbolic && Math.abs(Math.abs(im) - Math.SQRT1_2) < eps) {
-                const frac = '\\frac{i}{\\sqrt{2}}';
-                return im > 0 ? (isFirst ? frac : `+ ${frac}`) : `- ${frac}`;
-            }
-            if (symbolic && Math.abs(Math.abs(im) - 0.5) < eps) {
-                const frac = '\\frac{i}{2}';
-                return im > 0 ? (isFirst ? frac : `+ ${frac}`) : `- ${frac}`;
-            }
-
             const mag = formatMag(im);
-            const imagStr = isOne ? 'i' : `${mag}i`;
+            const imagStr = formatImagCoeff(mag);
             return im > 0 ? (isFirst ? imagStr : `+ ${imagStr}`) : `- ${imagStr}`;
         }
 

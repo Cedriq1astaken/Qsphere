@@ -180,16 +180,44 @@ describe('Quantum Math Module - States, Bloch, Hamming, and Phase', () => {
         const minusIAmps = [{ re: Math.SQRT1_2, im: 0 }, { re: 0, im: -Math.SQRT1_2 }];
         assert.strictEqual(formatQuantumStateKaTeX(minusIAmps), '\\frac{1}{\\sqrt{2}}|0\\rangle - \\frac{i}{\\sqrt{2}}|1\\rangle');
 
-        // Uniform 2-qubit superposition (|00⟩ + |01⟩ + |10⟩ + |11⟩) / 2
+        // Uniform 2-qubit superposition (|00⟩ + |01⟩ + |10⟩ + |11⟩) / 2 -> formats as \frac{1}{2}
         const uniform2Q = [{ re: 0.5, im: 0 }, { re: 0.5, im: 0 }, { re: 0.5, im: 0 }, { re: 0.5, im: 0 }];
         assert.strictEqual(formatQuantumStateKaTeX(uniform2Q), '\\frac{1}{2}|00\\rangle + \\frac{1}{2}|01\\rangle + \\frac{1}{2}|10\\rangle + \\frac{1}{2}|11\\rangle');
 
-        // Complex coefficients (symbolic fractions vs general decimals)
+        // Pure imaginary \frac{i}{2}
+        const imagHalf = [{ re: 0, im: 0 }, { re: 0, im: 0.5 }];
+        assert.strictEqual(formatQuantumStateKaTeX(imagHalf), '\\frac{i}{2}|1\\rangle');
+
+        // Any rational fractions m/n (m < n) such as \frac{1}{4}, \frac{3}{4}, \frac{2}{3}
+        const quarterAmps = [{ re: 0.25, im: 0 }, { re: 0.75, im: 0 }];
+        assert.strictEqual(formatQuantumStateKaTeX(quarterAmps), '\\frac{1}{4}|0\\rangle + \\frac{3}{4}|1\\rangle');
+
+        const twoThirdsAmps = [{ re: 2 / 3, im: 0 }, { re: 1 / 3, im: 0 }];
+        assert.strictEqual(formatQuantumStateKaTeX(twoThirdsAmps), '\\frac{2}{3}|0\\rangle + \\frac{1}{3}|1\\rangle');
+
+        // Standard W-state radical 1/sqrt(3) and any 1/sqrt(n)
+        const w3Amps = [
+            { re: 0, im: 0 },
+            { re: 1 / Math.sqrt(3), im: 0 },
+            { re: 1 / Math.sqrt(3), im: 0 },
+            { re: 0, im: 0 },
+            { re: 1 / Math.sqrt(3), im: 0 }
+        ];
+        assert.strictEqual(formatQuantumStateKaTeX(w3Amps, 3), '\\frac{1}{\\sqrt{3}}|001\\rangle + \\frac{1}{\\sqrt{3}}|010\\rangle + \\frac{1}{\\sqrt{3}}|100\\rangle');
+
+        // Any 1/sqrt(n): e.g. n=5, n=6, n=7, n=10
+        const sqrt5Amps = [{ re: 1 / Math.sqrt(5), im: 0 }, { re: 0, im: 1 / Math.sqrt(5) }];
+        assert.strictEqual(formatQuantumStateKaTeX(sqrt5Amps), '\\frac{1}{\\sqrt{5}}|0\\rangle + \\frac{i}{\\sqrt{5}}|1\\rangle');
+
+        const sqrt10Amps = [{ re: 1 / Math.sqrt(10), im: 0 }, { re: -1 / Math.sqrt(10), im: 0 }];
+        assert.strictEqual(formatQuantumStateKaTeX(sqrt10Amps), '\\frac{1}{\\sqrt{10}}|0\\rangle - \\frac{1}{\\sqrt{10}}|1\\rangle');
+
+        // Complex coefficients
         const complexHalfAmps = [{ re: 0.5, im: 0.5 }, { re: 0.5, im: -0.5 }];
         assert.strictEqual(formatQuantumStateKaTeX(complexHalfAmps), '\\left(\\frac{1}{2} + \\frac{1}{2}i\\right)|0\\rangle + \\left(\\frac{1}{2} - \\frac{1}{2}i\\right)|1\\rangle');
 
         const complexDecAmps = [{ re: 0.6, im: 0.8 }, { re: 0.6, im: -0.8 }];
-        assert.strictEqual(formatQuantumStateKaTeX(complexDecAmps), '\\left(0.6 + 0.8i\\right)|0\\rangle + \\left(0.6 - 0.8i\\right)|1\\rangle');
+        assert.strictEqual(formatQuantumStateKaTeX(complexDecAmps), '\\left(\\frac{3}{5} + \\frac{4}{5}i\\right)|0\\rangle + \\left(\\frac{3}{5} - \\frac{4}{5}i\\right)|1\\rangle');
 
         // Snapshot and result object inputs
         const snapshot = { qubits: 2, amplitudes: bellAmps };
