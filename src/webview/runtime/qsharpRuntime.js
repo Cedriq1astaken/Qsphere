@@ -1,5 +1,6 @@
 import { getDebugService, loadWasmModule, StepResultId } from 'qsharp-lang';
 import { parseAmplitude, isTrivialState } from '../math/index.js';
+import { emitQasmFromQSharpCircuit } from '../qasm/qasmEmitter.js';
 
 let wasmReady;
 
@@ -169,6 +170,18 @@ async function executeQSharp(source, fileName, wasmUri, targetOp, targetLine) {
         }
 
         result.qubitsList = Array.from({ length: result.qubitsDeclared }, (_, index) => `q${index}`);
+
+        try {
+            const circuitData = await debugService.getCircuit();
+            if (circuitData) {
+                const qasmProgram = emitQasmFromQSharpCircuit(circuitData, sourceName);
+                result.qasmProgram = qasmProgram;
+                result.qasm = qasmProgram.toQasm2String();
+            }
+        } catch (e) {
+            // Suppress if getCircuit is unavailable
+        }
+
         return result;
     } finally {
         await debugService.dispose();

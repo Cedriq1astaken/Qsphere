@@ -376,4 +376,21 @@ describe('Q# Stepping, Scoping, and Safety Limits', () => {
         assert.strictEqual(result.error, undefined);
         assert.strictEqual(result.qubitsDeclared, 1);
     });
+
+    test('5. executeQSharp emits OpenQASM 2.0 representation from getCircuit()', async () => {
+        const code = `
+        operation Main() : Unit {
+            use q = Qubit[2];
+            H(q[0]);
+            CNOT(q[0], q[1]);
+            ResetAll(q);
+        }
+        `;
+        const result = await executeQSharp(code);
+        assert.ok(result.qasm, 'result.qasm should be defined');
+        assert.ok(result.qasm.includes('OPENQASM 2.0;'));
+        assert.ok(result.qasm.includes('h q[0];'));
+        assert.ok(result.qasm.includes('cx q[0], q[1];'));
+        assert.ok(result.qasmProgram);
+    });
 });

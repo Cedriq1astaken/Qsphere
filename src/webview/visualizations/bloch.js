@@ -410,6 +410,7 @@ function renderMiniRenderer(renderer) {
         renderer.arrowGroup.add(createArrowMesh(renderer.currentVector, renderer.arrowMaterial));
     } else if (hasQueuedSteps) {
         renderer.targetVector = renderer.stepQueue.shift();
+        renderer.needsRender = true;
     }
 
     renderer.scene.rotation.set(renderer.rotation[0], renderer.rotation[1], renderer.rotation[2]);
@@ -532,11 +533,15 @@ function replayAnimation() {
         const renderer = miniRenderers[index];
         const arrowResult = computeBlochArrow(lastResult, index);
         const stepVectors = arrowResult.stepVectors || [];
-        const firstVector = stepVectors[0] || arrowResult.screenVector || [0, 1, 0];
-        const nextTarget = stepVectors[1] || firstVector;
+        const groundState = [0, 1, 0];
+        const fullSteps = (stepVectors.length === 0 || !vectorsClose(stepVectors[0], groundState))
+            ? [groundState, ...stepVectors]
+            : stepVectors;
+        const firstVector = fullSteps[0] || [0, 1, 0];
+        const nextTarget = fullSteps[1] || firstVector;
         renderer.currentVector = [...firstVector];
         renderer.targetVector = [...nextTarget];
-        renderer.stepQueue = stepVectors.slice(2);
+        renderer.stepQueue = fullSteps.slice(2);
         renderer.needsRender = true;
 
         while (renderer.arrowGroup.children.length > 0) {

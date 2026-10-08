@@ -934,5 +934,21 @@ describe('Qiskit Lezer AST Parser Capabilities', () => {
         // w_state was NOT called so its gates did not run
         assert.ok(result.steps.every(s => s.gate !== 'cry'));
     });
+
+    test('6. parseQiskit emits OpenQASM 2.0 representation', () => {
+        const source = [
+            'from qiskit import QuantumCircuit',
+            'qc = QuantumCircuit(2)',
+            'qc.h(0)',
+            'qc.cx(0, 1)'
+        ].join('\n');
+
+        const result = parseQiskit(source);
+        assert.ok(result.qasm);
+        assert.ok(result.qasm.includes('OPENQASM 2.0;'));
+        assert.ok(result.qasm.includes('h q[0];'));
+        assert.ok(result.qasm.includes('cx q[0], q[1];'));
+        assert.strictEqual(result.qasmProgram.instructions.length, 2);
+    });
 });
 

@@ -12,7 +12,7 @@ namespace QsphereTest {
         S(q[1]);
         SWAP(q[0], q[1]);
 
-
+        
         ResetAll(q);
     }
 }

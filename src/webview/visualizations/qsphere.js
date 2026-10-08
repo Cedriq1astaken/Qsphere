@@ -11,12 +11,6 @@ import {
     stepStatevectorTransition
 } from '../math/index.js';
 import {
-    getIsTransitioning,
-    getCurrentAmplitudes,
-    getCurrentQubits,
-    stepActiveStatevectorTransition
-} from './statevector.js';
-import {
     drawPhaseLegendToCanvas
     // generatePhaseGradientSvgDef,
     // generatePhaseLegendSvg
@@ -24,6 +18,11 @@ import {
 import { getOrCreateHoverTooltip } from '../render/hoverTooltip.js';
 
 let qsphereHoverInfo = null;
+let currentAmplitudes = [];
+let targetAmplitudes = [];
+let currentQubits = 0;
+let targetQubits = 0;
+let isTransitioning = false;
 
 function computeQsphereWithState(state, N) {
     const points = computeQspherePoints(N);
@@ -265,8 +264,6 @@ function updateQsphereSceneWithAmplitudes(state, N, options = {}) {
 function setQsphereHoveredIndex(index) {
     if (!threeState || threeState._qsphereHoveredIndex === index) return;
     threeState._qsphereHoveredIndex = index;
-    const currentAmplitudes = getCurrentAmplitudes();
-    const currentQubits = getCurrentQubits();
     if (currentAmplitudes && currentAmplitudes.length > 0) {
         updateQsphereSceneWithAmplitudes(currentAmplitudes, currentQubits, { rebuildLabels: false });
     } else if (lastResult) {
@@ -527,6 +524,11 @@ const qsphereVisualization = {
 
         if (lastResult) {
             const { state, N } = getQsphereState(lastResult);
+            currentAmplitudes = state.map(a => ({ ...a }));
+            currentQubits = N;
+            targetAmplitudes = state;
+            targetQubits = N;
+            isTransitioning = false;
             updateQsphereSceneWithAmplitudes(state, N, { rebuildLabels: true });
         }
     },
@@ -555,13 +557,28 @@ const qsphereVisualization = {
         if (!result) return;
         lastResult = result;
         const { state, N } = getQsphereState(result);
-        updateQsphereSceneWithAmplitudes(state, N, options);
+        targetAmplitudes = state;
+        targetQubits = N;
+
+        if (options.immediate || currentQubits !== N || currentAmplitudes.length !== state.length) {
+            currentQubits = N;
+            currentAmplitudes = state.map(a => ({ ...a }));
+            isTransitioning = false;
+            updateQsphereSceneWithAmplitudes(currentAmplitudes, currentQubits, options);
+        } else {
+            isTransitioning = true;
+        }
     },
 
     animate(lerpFactor = 0.20) {
-        if (getIsTransitioning()) {
-            const transition = stepActiveStatevectorTransition(lerpFactor, 1e-4);
-            updateQsphereSceneWithAmplitudes(transition.currentAmplitudes, transition.currentQubits, { rebuildLabels: true });
+        if (isTransitioning) {
+            const transition = stepStatevectorTransition(currentAmplitudes, targetAmplitudes, lerpFactor, 1e-4);
+            currentAmplitudes = transition.currentAmplitudes;
+            isTransitioning = transition.isTransitioning;
+            updateQsphereSceneWithAmplitudes(currentAmplitudes, currentQubits, { rebuildLabels: false });
+            if (!isTransitioning) {
+                rebuildQsphereLabels(threeState?._qsphereData?.points, currentQubits, currentAmplitudes);
+            }
         }
     },
 

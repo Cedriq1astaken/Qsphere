@@ -12,6 +12,7 @@
  */
 
 import { parser } from '@lezer/python';
+import { OpenQasmProgram } from '../qasm/ir.js';
 
 // ---------------------------------------------------------------------------
 // Complex number helpers (lightweight, self-contained)
@@ -1116,6 +1117,7 @@ function applyCircuitGate(gate, args, ctx, scope, lineIdx, rawLine) {
     }
 
     if (gateApplied) {
+        recordInstructionToQasm(gate, args, scope, ctx, lineIdx, rawLine);
         ctx.result.steps.push({
             line: lineIdx,
             range: { start: { line: lineIdx, character: 0 }, end: { line: lineIdx, character: (rawLine || '').length } },
@@ -1126,6 +1128,94 @@ function applyCircuitGate(gate, args, ctx, scope, lineIdx, rawLine) {
             ctx.lastSnapshot = snapshot;
             ctx.result.states.push(snapshot);
         }
+    }
+}
+
+function recordInstructionToQasm(gate, args, scope, ctx, lineIdx, rawLine) {
+    if (!ctx.qasmProgram) return;
+    const srcMap = { line: lineIdx, col: 0, file: 'main.py' };
+
+    if (gate === 'reset') {
+        const q = evalQubit(args[0], scope);
+        if (!isNaN(q)) ctx.qasmProgram.addReset(q, srcMap, rawLine);
+        return;
+    }
+    if (gate === 'barrier') {
+        ctx.qasmProgram.addBarrier([], srcMap, rawLine);
+        return;
+    }
+    if (gate === 'measure' || gate === 'measure_all') {
+        return;
+    }
+    if (gate === 'initialize') {
+        return;
+    }
+
+    let op = gate;
+    let params = [];
+    let qubits = [];
+
+    if (['rx', 'ry', 'rz'].includes(gate)) {
+        if (args.length >= 3) {
+            op = 'c' + gate;
+            params = [evalPythonExpr(args[0], scope)];
+            qubits = [evalQubit(args[1], scope), evalQubit(args[2], scope)];
+        } else {
+            params = [evalPythonExpr(args[0], scope)];
+            qubits = [evalQubit(args[1], scope)];
+        }
+    } else if (gate === 'p' || gate === 'u1') {
+        op = 'p';
+        params = [evalPythonExpr(args[0], scope)];
+        qubits = [evalQubit(args[1], scope)];
+    } else if (gate === 'u' || gate === 'u3') {
+        op = 'u';
+        params = [evalPythonExpr(args[0], scope), evalPythonExpr(args[1], scope), evalPythonExpr(args[2], scope)];
+        qubits = [evalQubit(args[3], scope)];
+    } else if (gate === 'u2') {
+        op = 'u2';
+        params = [evalPythonExpr(args[0], scope), evalPythonExpr(args[1], scope)];
+        qubits = [evalQubit(args[2], scope)];
+    } else if (gate === 'cp' || gate === 'cu1') {
+        op = 'cp';
+        params = [evalPythonExpr(args[0], scope)];
+        qubits = [evalQubit(args[1], scope), evalQubit(args[2], scope)];
+    } else if (['crx', 'cry', 'crz'].includes(gate)) {
+        params = [evalPythonExpr(args[0], scope)];
+        qubits = [evalQubit(args[1], scope), evalQubit(args[2], scope)];
+    } else if (gate === 'cu') {
+        params = [evalPythonExpr(args[0], scope), evalPythonExpr(args[1], scope), evalPythonExpr(args[2], scope)];
+        qubits = [evalQubit(args[4], scope), evalQubit(args[5], scope)];
+    } else if (['rxx', 'ryy', 'rzz', 'rzx'].includes(gate)) {
+        params = [evalPythonExpr(args[0], scope)];
+        qubits = [evalQubit(args[1], scope), evalQubit(args[2], scope)];
+    } else if (gate === 'mcx') {
+        const ctrl = evalQubitList(args[0], scope) || [];
+        const tgt = evalQubit(args[1], scope);
+        qubits = [...ctrl, tgt];
+    } else if (gate === 'mcp') {
+        params = [evalPythonExpr(args[0], scope)];
+        const ctrl = evalQubitList(args[1], scope) || [];
+        const tgt = evalQubit(args[2], scope);
+        qubits = [...ctrl, tgt];
+    } else if (gate === 'cswap' || gate === 'fredkin') {
+        op = 'cswap';
+        qubits = [evalQubit(args[0], scope), evalQubit(args[1], scope), evalQubit(args[2], scope)];
+    } else if (gate === 'ccx' || gate === 'toffoli') {
+        op = 'ccx';
+        qubits = [evalQubit(args[0], scope), evalQubit(args[1], scope), evalQubit(args[2], scope)];
+    } else if (gate === 'cx' || gate === 'cnot') {
+        op = 'cx';
+        qubits = [evalQubit(args[0], scope), evalQubit(args[1], scope)];
+    } else if (gate === 'not') {
+        op = 'x';
+        qubits = [evalQubit(args[0], scope)];
+    } else {
+        qubits = args.map(a => evalQubit(a, scope)).filter(q => !isNaN(q));
+    }
+
+    if (qubits.every(q => !isNaN(q) && q >= 0)) {
+        ctx.qasmProgram.addGate(op, qubits, params, srcMap, rawLine);
     }
 }
 
@@ -1413,6 +1503,9 @@ function parseQiskit(source, targetLine) {
     const rawLines = source.split('\n');
     const hasTargetLine = typeof targetLine === 'number' && targetLine >= 0;
 
+    const qasmProgram = new OpenQasmProgram();
+    qasmProgram.addQreg('q', N);
+
     const ctx = {
         sv,
         N,
@@ -1424,7 +1517,8 @@ function parseQiskit(source, targetLine) {
         lastSnapshot: initialSnapshot,
         stopped: false,
         returning: false,
-        functions: {}
+        functions: {},
+        qasmProgram
     };
 
     const scope = {
@@ -1455,6 +1549,11 @@ function parseQiskit(source, targetLine) {
     // Strip leading trivial |0...0⟩ states (same as Q# runtime)
     while (result.states.length > 1 && isTrivialState(result.states[0])) {
         result.states.shift();
+    }
+
+    if (ctx.qasmProgram) {
+        result.qasmProgram = ctx.qasmProgram;
+        result.qasm = ctx.qasmProgram.toQasm2String();
     }
 
     return result;
