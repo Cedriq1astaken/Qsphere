@@ -12,7 +12,8 @@
   ],
   "activationEvents": [
     "onLanguage:qsharp",
-    "onLanguage:python"
+    "onLanguage:python",
+    "onLanguage:qasm"
   ],
   "main": "./out/extension.js",
   "files": [
@@ -47,7 +48,7 @@
       {
         "command": "qsphere.inspectCurrentLine",
         "key": "shift+enter",
-        "when": "editorTextFocus && (resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python)"
+        "when": "editorTextFocus && (resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python || resourceExtname == .qasm || resourceExtname == .openqasm || editorLangId == qasm)"
       }
     ],
     "menus": {
@@ -55,19 +56,19 @@
         {
           "command": "qsphere.openVisualizer",
           "group": "navigation",
-          "when": "resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python"
+          "when": "resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python || resourceExtname == .qasm || resourceExtname == .openqasm || editorLangId == qasm"
         }
       ],
       "editor/context": [
         {
           "command": "qsphere.openVisualizer",
           "group": "navigation",
-          "when": "resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python"
+          "when": "resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python || resourceExtname == .qasm || resourceExtname == .openqasm || editorLangId == qasm"
         },
         {
           "command": "qsphere.inspectCurrentLine",
           "group": "navigation",
-          "when": "resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python"
+          "when": "resourceExtname == .qs || editorLangId == qsharp || resourceExtname == .py || editorLangId == python || resourceExtname == .qasm || resourceExtname == .openqasm || editorLangId == qasm"
         }
       ]
     }

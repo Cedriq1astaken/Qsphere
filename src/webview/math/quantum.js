@@ -217,6 +217,10 @@ function formatQuantumStateKaTeX(stateInput, options = {}) {
         if (N === undefined) N = qstate.N;
     }
 
+    if (stateInput && stateInput.error) {
+        return '\\text{State unavailable}';
+    }
+
     if (!amplitudes || amplitudes.length === 0) {
         const numQubits = typeof N === 'number' && N > 0 ? N : 1;
         return `${ketPrefix}${'0'.repeat(numQubits)}${ketSuffix}`;

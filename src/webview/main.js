@@ -20,6 +20,7 @@ import {
     getQsphereState
 } from './math/index.js';
 import { drawPhaseLegendToCanvas } from './render/phaseLegend.js';
+import { simulateOpenQasm } from './runtime/simulator.js';
 
 const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : undefined;
 
@@ -170,7 +171,14 @@ function isPythonFile(fileName) {
     return typeof fileName === 'string' && fileName.endsWith('.py');
 }
 
+function isQasmFile(fileName) {
+    return typeof fileName === 'string' && (fileName.endsWith('.qasm') || fileName.endsWith('.openqasm'));
+}
+
 async function executeParser(code, targetOp, targetLine, fileName) {
+    if (isQasmFile(fileName)) {
+        return simulateOpenQasm(code, targetLine, fileName);
+    }
     if (isPythonFile(fileName) && typeof parseQiskit === 'function') {
         return parseQiskit(code, targetLine);
     }
@@ -447,7 +455,7 @@ async function applyParsedUpdate(code, targetOp, targetLine, fileName) {
     }
     try {
         const result = await executeParser(code, currentTargetOp, targetLine, currentFileName);
-        const lang = isPythonFile(currentFileName) ? 'Qiskit' : 'Q#';
+        const lang = isQasmFile(currentFileName) ? 'OpenQASM' : (isPythonFile(currentFileName) ? 'Qiskit' : 'Q#');
         if (targetLine !== undefined) {
             console.log(lang + ' Inspected Line Result (line ' + (targetLine + 1) + '):', result);
         } else {

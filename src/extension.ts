@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log('StateVisualizer extension active for .qs and .py files!');
+    console.log('StateVisualizer extension active for .qs, .py, and .qasm files!');
 
     let activeTargetOp: { name: string, startLine: number, endLine: number } | undefined;
     let activePanel: vscode.WebviewPanel | undefined;
@@ -100,20 +100,11 @@ export function activate(context: vscode.ExtensionContext) {
                         const pngFileName = `${vizName}_${timestamp}.png`;
                         const pngFilePath = path.join(targetDir, pngFileName);
 
-                        // SVG export disabled for now
-                        // const svgFileName = `${vizName}_${timestamp}.svg`;
-                        // const svgFilePath = path.join(targetDir, svgFileName);
-
                         if (item.pngDataUrl) {
                             const base64Data = item.pngDataUrl.replace(/^data:image\/png;base64,/, '');
                             await fs.promises.writeFile(pngFilePath, Buffer.from(base64Data, 'base64'));
                             exportedNames.push(pngFileName);
                         }
-
-                        // if (item.svgContent) {
-                        //     await fs.promises.writeFile(svgFilePath, item.svgContent, 'utf8');
-                        //     exportedNames.push(svgFileName);
-                        // }
                     }
 
                     if (exportedNames.length > 0) {
@@ -141,7 +132,7 @@ export function activate(context: vscode.ExtensionContext) {
         const trackedUri = sourceDocument?.uri.toString();
         const changeDisposable = vscode.workspace.onDidChangeTextDocument(event => {
             const fn = event.document.fileName;
-            if (!fn.endsWith('.qs') && !fn.endsWith('.py')) return;
+            if (!fn.endsWith('.qs') && !fn.endsWith('.py') && !fn.endsWith('.qasm') && !fn.endsWith('.openqasm')) return;
             if (trackedUri && event.document.uri.toString() !== trackedUri) return;
 
             // Clear any previous line inspection decoration when text is edited / newlines inserted
@@ -230,8 +221,6 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     function findPythonCircuit(doc: vscode.TextDocument): { name: string, startLine: number, endLine: number } | null {
-        const circuitPattern = /^(\s*)(\w+)\s*=\s*(?:\w+\.)*QuantumCircuit\s*\(\s*(\w+)/;
-
         // Detect aliased QuantumCircuit names
         const fullText = doc.getText();
         const aliasMatch = fullText.match(/from\s+qiskit(?:\.\w+)*\s+import\s+QuantumCircuit\s+as\s+(\w+)/);
@@ -261,6 +250,20 @@ export function activate(context: vscode.ExtensionContext) {
         return null;
     }
 
+    function findQasmCircuit(doc: vscode.TextDocument): { name: string, startLine: number, endLine: number } | null {
+        if (doc.lineCount === 0) return null;
+        let startLine = 0;
+        for (let line = 0; line < doc.lineCount; line++) {
+            const text = doc.lineAt(line).text.trim();
+            if (text.length > 0 && !text.startsWith('//')) {
+                startLine = line;
+                break;
+            }
+        }
+        const endLine = doc.lineCount - 1;
+        return { name: 'qasm_circuit', startLine, endLine };
+    }
+
     const inspectCurrentLineDisposable = vscode.commands.registerCommand('qsphere.inspectCurrentLine', () => {
         const activeEditor = vscode.window.activeTextEditor;
         if (!activeEditor) return;
@@ -268,7 +271,8 @@ export function activate(context: vscode.ExtensionContext) {
         const document = activeEditor.document;
         const isPython = document.fileName.endsWith('.py') || document.languageId === 'python';
         const isQSharp = document.fileName.endsWith('.qs') || document.languageId === 'qsharp';
-        if (!isPython && !isQSharp) return;
+        const isQasm = document.fileName.endsWith('.qasm') || document.fileName.endsWith('.openqasm') || document.languageId === 'qasm';
+        if (!isPython && !isQSharp && !isQasm) return;
 
         const cursorLine = activeEditor.selection.active.line;
 
@@ -314,7 +318,7 @@ export function activate(context: vscode.ExtensionContext) {
                     data: payload
                 });
             }
-        } else {
+        } else if (isPython) {
             // Python / Qiskit
             const circuit = findPythonCircuit(document);
             if (!circuit || cursorLine < circuit.startLine || cursorLine > circuit.endLine) {
@@ -332,6 +336,49 @@ export function activate(context: vscode.ExtensionContext) {
 
             let nextLine = cursorLine + 1;
             while (nextLine < circuit.endLine && document.lineAt(nextLine).text.trim().length === 0) {
+                nextLine++;
+            }
+            if (nextLine <= circuit.endLine) {
+                const nextLineEnd = document.lineAt(nextLine).range.end;
+                activeEditor.selection = new vscode.Selection(nextLineEnd, nextLineEnd);
+                activeEditor.revealRange(new vscode.Range(nextLineEnd, nextLineEnd), vscode.TextEditorRevealType.Default);
+            }
+
+            const payload = {
+                fileName: document.fileName,
+                code: document.getText(),
+                targetLine: effectiveLine,
+                lineText,
+                targetOp: circuit
+            };
+
+            if (!activePanel) {
+                pendingInspectPayload = payload;
+                vscode.commands.executeCommand('qsphere.openVisualizer', circuit);
+            } else {
+                activePanel.webview.postMessage({
+                    command: 'inspectLine',
+                    data: payload
+                });
+            }
+        } else if (isQasm) {
+            // OpenQASM 2.0 / 3.0
+            const circuit = findQasmCircuit(document);
+            if (!circuit || cursorLine < circuit.startLine || cursorLine > circuit.endLine) {
+                return;
+            }
+
+            let effectiveLine = cursorLine;
+            while (effectiveLine > circuit.startLine && (document.lineAt(effectiveLine).text.trim().length === 0 || document.lineAt(effectiveLine).text.trim().startsWith('//'))) {
+                effectiveLine--;
+            }
+
+            const lineText = document.lineAt(effectiveLine).text.trim();
+            const lineRange = document.lineAt(effectiveLine).range;
+            activeEditor.setDecorations(lineHighlightDecoration, [lineRange]);
+
+            let nextLine = cursorLine + 1;
+            while (nextLine < circuit.endLine && (document.lineAt(nextLine).text.trim().length === 0 || document.lineAt(nextLine).text.trim().startsWith('//'))) {
                 nextLine++;
             }
             if (nextLine <= circuit.endLine) {
@@ -404,12 +451,34 @@ export function activate(context: vscode.ExtensionContext) {
         }
     );
 
+    const qasmCodeLensProvider = vscode.languages.registerCodeLensProvider(
+        [{ pattern: '**/*.qasm' }, { pattern: '**/*.openqasm' }, { language: 'qasm' }],
+        {
+            provideCodeLenses(document: vscode.TextDocument): vscode.CodeLens[] {
+                const isQasm = document.fileName.endsWith('.qasm') || document.fileName.endsWith('.openqasm') || document.languageId === 'qasm';
+                if (!isQasm) return [];
+                const circuit = findQasmCircuit(document);
+                if (!circuit) return [];
+
+                return [
+                    new vscode.CodeLens(new vscode.Range(circuit.startLine, 0, circuit.startLine, 0), {
+                        title: 'State',
+                        command: 'qsphere.openVisualizer',
+                        arguments: [circuit],
+                        tooltip: 'Open StateVisualizer for OpenQASM circuit'
+                    })
+                ];
+            }
+        }
+    );
+
     context.subscriptions.push(
         openVisualizerDisposable,
         inspectCurrentLineDisposable,
         replayAnimationDisposable,
         codeLensProvider,
         pythonCodeLensProvider,
+        qasmCodeLensProvider,
         lineHighlightDecoration
     );
 }
